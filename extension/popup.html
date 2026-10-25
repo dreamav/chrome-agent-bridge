@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chrome Agent Bridge</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: rgba(18, 24, 38, 0.75);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --cyan-neon: #38bdf8;
+      --indigo-neon: #818cf8;
+      --green-online: #10b981;
+      --red-offline: #ef4444;
+      --btn-grad: linear-gradient(135deg, #0284c7 0%, #4f46e5 100%);
+      --btn-hover: linear-gradient(135deg, #0369a1 0%, #4338ca 100%);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      width: 320px;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text-main);
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Ambient background glow */
+    body::before {
+      content: '';
+      position: absolute;
+      top: -40px;
+      right: -40px;
+      width: 140px;
+      height: 140px;
+      background: radial-gradient(circle, rgba(56, 189, 248, 0.15), transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    body::after {
+      content: '';
+      position: absolute;
+      bottom: -30px;
+      left: -30px;
+      width: 120px;
+      height: 120px;
+      background: radial-gradient(circle, rgba(129, 140, 248, 0.12), transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 2px;
+    }
+
+    .title-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .logo-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.35);
+    }
+
+    h1 {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.2px;
+      color: #fff;
+    }
+
+    .badge-status {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      transition: all 0.3s ease;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--red-offline);
+      box-shadow: 0 0 6px var(--red-offline);
+      transition: all 0.3s ease;
+    }
+
+    .badge-status.connected .status-dot {
+      background: var(--green-online);
+      box-shadow: 0 0 8px var(--green-online);
+      animation: pulse 2s infinite ease-in-out;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.15); }
+    }
+
+    /* Metric Card */
+    .card {
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 10px 14px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    }
+
+    .metric-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .metric-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .metric-value {
+      font-size: 20px;
+      font-weight: 700;
+      color: #fff;
+      display: flex;
+      align-items: baseline;
+      gap: 4px;
+    }
+
+    .metric-value span {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+
+    /* Buttons */
+    .btn {
+      width: 100%;
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12.5px;
+      font-weight: 600;
+      border-radius: 9px;
+      padding: 9px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      outline: none;
+    }
+
+    .btn:active {
+      transform: scale(0.98);
+    }
+
+    .btn-primary {
+      background: var(--btn-grad);
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(2, 132, 199, 0.35);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+
+    .btn-primary:hover {
+      background: var(--btn-hover);
+      box-shadow: 0 6px 18px rgba(2, 132, 199, 0.45);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-main);
+      border: 1px solid var(--card-border);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.09);
+      border-color: rgba(255, 255, 255, 0.16);
+    }
+
+    .btn-ai {
+      background: linear-gradient(135deg, #7c3aed 0%, #2563eb 100%);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      box-shadow: 0 4px 14px rgba(124, 58, 237, 0.3);
+    }
+
+    .btn-ai:hover {
+      background: linear-gradient(135deg, #6d28d9 0%, #1d4ed8 100%);
+      box-shadow: 0 6px 18px rgba(124, 58, 237, 0.45);
+    }
+
+    /* Toast notification */
+    .toast {
+      font-size: 11px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      text-align: center;
+      display: none;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      color: #bae6fd;
+      animation: fadeIn 0.25s ease-out;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Footer */
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--text-muted);
+      padding: 4px 2px 0 2px;
+    }
+
+    .endpoint {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: #7dd3fc;
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <div class="title-group">
+        <img src="icons/icon48.png" alt="Bridge Logo" class="logo-icon" />
+        <h1>Chrome Bridge</h1>
+      </div>
+      <div id="statusBadge" class="badge-status">
+        <div id="statusDot" class="status-dot"></div>
+        <span id="statusText">Offline 🔴</span>
+      </div>
+    </div>
+
+    <!-- Metric Card -->
+    <div class="card">
+      <div class="metric-row">
+        <span class="metric-label">Открытых вкладок:</span>
+        <div class="metric-value">
+          <span id="tabCount">0</span>
+          <span>вкладок</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toastMessage" class="toast"></div>
+
+    <!-- Main Action Buttons -->
+    <button id="btnRefresh" class="btn btn-primary" type="button">
+      Обновить список вкладок →
+    </button>
+
+    <button id="btnDedupe" class="btn btn-secondary" type="button">
+      Закрыть дубликаты →
+    </button>
+
+    <button id="btnUngroup" class="btn btn-secondary" type="button">
+      Распустить группы →
+    </button>
+
+    <button id="btnSmart" class="btn btn-ai" type="button">
+      Умная организация (AI) →
+    </button>
+
+    <!-- Footer info -->
+    <div class="footer">
+      <span class="endpoint">ws://127.0.0.1:8765</span>
+      <span>KISS Executor → 0% CPU</span>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
