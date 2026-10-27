@@ -19,6 +19,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const liveGroupCountBadge = document.getElementById('liveGroupCountBadge');
   const savedCountBadge = document.getElementById('savedCountBadge');
   const savedSessionsList = document.getElementById('savedSessionsList');
+  const sessionsSortSelect = document.getElementById('sessionsSortSelect');
+  const btnClearSessions = document.getElementById('btnClearSessions');
 
   const sidebar = document.querySelector('.sidebar');
   const btnToggleSidebar = document.getElementById('btnToggleSidebar');
@@ -144,27 +146,88 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // --- Sessions Sorting State & Helper ---
+  let currentSortOrder = localStorage.getItem('chrome_bridge_sort_order') || 'date_desc';
+
+  if (sessionsSortSelect) {
+    sessionsSortSelect.value = currentSortOrder;
+    sessionsSortSelect.addEventListener('change', () => {
+      currentSortOrder = sessionsSortSelect.value;
+      localStorage.setItem('chrome_bridge_sort_order', currentSortOrder);
+      renderSidebarSessions();
+    });
+  }
+
+  if (btnClearSessions) {
+    btnClearSessions.addEventListener('click', async () => {
+      if (!savedSessions || savedSessions.length === 0) {
+        showToast('Список сохранённых сессий уже пуст.');
+        return;
+      }
+      const count = savedSessions.length;
+      const confirmed = confirm(
+        `🗑️ Удалить ВСЕ ${count} сохранённых сессий из памяти?\n\n` +
+        `Это действие полностью очистит сохранённую историю, и вы сможете сделать чистый импорт заново с правильными датами.`
+      );
+      if (!confirmed) return;
+
+      await chrome.storage.local.set({ saved_sessions: [] });
+      savedSessions = [];
+      if (activeSession && !activeSession.isLive) {
+        selectSession(liveSession);
+      }
+      renderSidebarSessions();
+      showToast(`История очищена: удалено ${count} сессий.`);
+    });
+  }
+
+  function getSortedSessions(sessionsList) {
+    const list = [...(sessionsList || [])];
+    switch (currentSortOrder) {
+      case 'date_asc':
+        return list.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+      case 'name_asc':
+        return list.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ru', { numeric: true, sensitivity: 'base' }));
+      case 'name_desc':
+        return list.sort((a, b) => (b.name || '').localeCompare(a.name || '', 'ru', { numeric: true, sensitivity: 'base' }));
+      case 'tabs_desc':
+        return list.sort((a, b) => (b.tabCount || 0) - (a.tabCount || 0));
+      case 'tabs_asc':
+        return list.sort((a, b) => (a.tabCount || 0) - (b.tabCount || 0));
+      case 'date_desc':
+      default:
+        return list.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    }
+  }
+
   // --- Render Sidebar Saved Sessions ---
   function renderSidebarSessions() {
     if (savedSessions.length === 0) {
       savedSessionsList.innerHTML = `
         <div style="text-align: center; color: var(--text-muted); font-size: 11px; padding: 16px;">
-          Нет сохранённых сессий.<br>Нажмите «Сохранить текущее состояние».
+          Нет сохранённых сессий.<br>Нажмите «Сохранить состояние».
         </div>
       `;
+      savedCountBadge.textContent = '0';
       return;
     }
 
+    savedCountBadge.textContent = savedSessions.length;
+    const sorted = getSortedSessions(savedSessions);
+
     savedSessionsList.innerHTML = '';
-    savedSessions.forEach((session) => {
+    sorted.forEach((session) => {
       const isSelected = activeSession && activeSession.id === session.id;
       const card = document.createElement('div');
       card.className = `session-nav-item ${isSelected ? 'active' : ''}`;
       card.setAttribute('data-id', session.id);
 
-      const dateStr = new Date(session.timestamp).toLocaleString('ru-RU', {
+      const sDate = new Date(session.timestamp || Date.now());
+      const isCurrentYear = sDate.getFullYear() === new Date().getFullYear();
+      const dateStr = sDate.toLocaleString('ru-RU', {
         day: '2-digit',
         month: '2-digit',
+        year: isCurrentYear ? undefined : 'numeric',
         hour: '2-digit',
         minute: '2-digit'
       });
@@ -1039,16 +1102,122 @@ document.addEventListener('DOMContentLoaded', async () => {
   // SESSION BUDDY IMPORT (v3 and v4 JSON formats)
   // ==========================================================================
   function parseSessionBuddyJSON(data) {
-    const sessionsToImport = [];
+    const rawSessions = [];
     const CHROME_COLORS = ['blue', 'cyan', 'green', 'yellow', 'orange', 'red', 'pink', 'purple', 'grey'];
 
-    function parseTimestamp(val) {
-      if (!val) return Date.now();
-      if (typeof val === 'number') {
-        return val < 1e11 ? val * 1000 : val;
+    const CANDIDATE_DATE_PROPS = [
+      'created', 'createdAt', 'creationDate', 'creation_date',
+      'timestamp', 'time', 'dateTime', 'date', 'dateCreated',
+      'modified', 'updated', 'updatedAt', 'lastModified', 'dateModified',
+      'mtime', 'ctime', 'saved', 'saveDate'
+    ];
+
+    function tryParseValue(val) {
+      if (val === null || val === undefined) return null;
+      if (typeof val === 'number' && !isNaN(val)) {
+        const ms = val < 1e11 ? val * 1000 : val;
+        if (ms > 946684800000 && ms < 2208988800000) { // between 2000 and 2040
+          return ms;
+        }
       }
-      const parsed = new Date(val).getTime();
-      return isNaN(parsed) ? Date.now() : parsed;
+      if (typeof val === 'string' && val.trim()) {
+        const trimmed = val.trim();
+        const parsed = Date.parse(trimmed);
+        if (!isNaN(parsed) && parsed > 946684800000 && parsed < 2208988800000) {
+          return parsed;
+        }
+        if (/^\d{10,13}$/.test(trimmed)) {
+          const num = Number(trimmed);
+          const ms = num < 1e11 ? num * 1000 : num;
+          if (ms > 946684800000 && ms < 2208988800000) {
+            return ms;
+          }
+        }
+      }
+      return null;
+    }
+
+    function tryParseDateFromString(str) {
+      if (!str || typeof str !== 'string') return null;
+
+      // Pattern A: YYYY-MM-DD or YYYY.MM.DD or YYYY/MM/DD or YYYY MM DD
+      // e.g. "2018 11 24", "2018 11 24 11 24", "2018-11-24 14:30"
+      const patternA = /\b(20\d\d)[.\-\/ ](0?[1-9]|1[0-2])[.\-\/ ](0?[1-9]|[12]\d|3[01])(?:[ ,T_]+([01]?\d|2[0-3])[:. ]([0-5]\d)(?:[:. ]([0-5]\d))?)?\b/;
+      const matchA = str.match(patternA);
+      if (matchA) {
+        const year = parseInt(matchA[1], 10);
+        const month = parseInt(matchA[2], 10) - 1;
+        const day = parseInt(matchA[3], 10);
+        const hour = matchA[4] ? parseInt(matchA[4], 10) : 12;
+        const min = matchA[5] ? parseInt(matchA[5], 10) : 0;
+        const sec = matchA[6] ? parseInt(matchA[6], 10) : 0;
+        const dt = new Date(year, month, day, hour, min, sec);
+        if (!isNaN(dt.getTime())) return dt.getTime();
+      }
+
+      // Pattern B: DD.MM.YYYY or DD-MM-YYYY or DD/MM/YYYY
+      // e.g. "24.11.2018 14:30", "24-11-2018"
+      const patternB = /\b(0?[1-9]|[12]\d|3[01])[.\-\/](0?[1-9]|1[0-2])[.\-\/](20\d\d)(?:[ ,T_]+([01]?\d|2[0-3])[:. ]([0-5]\d)(?:[:. ]([0-5]\d))?)?\b/;
+      const matchB = str.match(patternB);
+      if (matchB) {
+        const day = parseInt(matchB[1], 10);
+        const month = parseInt(matchB[2], 10) - 1;
+        const year = parseInt(matchB[3], 10);
+        const hour = matchB[4] ? parseInt(matchB[4], 10) : 12;
+        const min = matchB[5] ? parseInt(matchB[5], 10) : 0;
+        const sec = matchB[6] ? parseInt(matchB[6], 10) : 0;
+        const dt = new Date(year, month, day, hour, min, sec);
+        if (!isNaN(dt.getTime())) return dt.getTime();
+      }
+
+      // Pattern C: MM/DD/YYYY (US format common in Session Buddy)
+      const patternC = /\b(0?[1-9]|1[0-2])\/(0?[1-9]|[12]\d|3[01])\/(20\d\d)(?:[ ,T_]+([01]?\d|2[0-3])[:. ]([0-5]\d)(?:[:. ]([0-5]\d))?)?\b/;
+      const matchC = str.match(patternC);
+      if (matchC) {
+        const month = parseInt(matchC[1], 10) - 1;
+        const day = parseInt(matchC[2], 10);
+        const year = parseInt(matchC[3], 10);
+        const hour = matchC[4] ? parseInt(matchC[4], 10) : 12;
+        const min = matchC[5] ? parseInt(matchC[5], 10) : 0;
+        const sec = matchC[6] ? parseInt(matchC[6], 10) : 0;
+        const dt = new Date(year, month, day, hour, min, sec);
+        if (!isNaN(dt.getTime())) return dt.getTime();
+      }
+
+      // Pattern D: Textual English date e.g. "Nov 24, 2018"
+      const parsedDirect = Date.parse(str);
+      if (!isNaN(parsedDirect) && parsedDirect > 946684800000 && parsedDirect < 2208988800000) {
+        return parsedDirect;
+      }
+
+      return null;
+    }
+
+    function extractDateFromEntity(entity, subItems = []) {
+      if (!entity) return null;
+      // 1. Direct properties on entity
+      for (const prop of CANDIDATE_DATE_PROPS) {
+        const res = tryParseValue(entity[prop]);
+        if (res !== null) return res;
+      }
+      // 2. Direct properties on sub-items (folders, windows, tabs, links)
+      for (const sub of subItems) {
+        if (!sub) continue;
+        for (const prop of CANDIDATE_DATE_PROPS) {
+          const res = tryParseValue(sub[prop]);
+          if (res !== null) return res;
+        }
+      }
+      // 3. String date in entity title / name
+      const titleRes = tryParseDateFromString(entity.title || entity.name);
+      if (titleRes !== null) return titleRes;
+      // 4. String date in sub-items title / name
+      for (const sub of subItems) {
+        if (!sub) continue;
+        const subTitleRes = tryParseDateFromString(sub.title || sub.name);
+        if (subTitleRes !== null) return subTitleRes;
+      }
+      return null;
     }
 
     // Normalize wrapped structure or raw array
@@ -1114,15 +1283,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (tabs.length === 0 && groups.length === 0) continue;
 
-        const time = parseTimestamp(col.created || col.createdAt || col.modified);
+        const subItems = [...(col.folders || []), ...(col.links || [])];
+        const detectedTime = extractDateFromEntity(col, subItems);
         const title = col.title || col.name || 'Session Buddy Экспорт';
 
-        sessionsToImport.push({
-          id: 'sb_' + time + '_' + Math.random().toString(36).substr(2, 5),
-          name: title,
+        rawSessions.push({
+          rawEntity: col,
           title: title,
-          timestamp: time,
-          createdAt: time,
+          detectedTimestamp: detectedTime,
           windowCount: 1,
           tabCount: tabs.length,
           groupCount: groups.length,
@@ -1135,6 +1303,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       for (const sess of sessions) {
         if (!sess) continue;
         const tabs = [];
+        const allTabs = [];
         for (const win of (sess.windows || [])) {
           for (const t of (win.tabs || [])) {
             if (!t || !t.url) continue;
@@ -1144,6 +1313,7 @@ document.addEventListener('DOMContentLoaded', async () => {
               groupId: -1,
               pinned: Boolean(t.pinned)
             });
+            allTabs.push(t);
           }
         }
 
@@ -1156,20 +1326,20 @@ document.addEventListener('DOMContentLoaded', async () => {
               groupId: -1,
               pinned: Boolean(t.pinned)
             });
+            allTabs.push(t);
           }
         }
 
         if (tabs.length === 0) continue;
 
-        const time = parseTimestamp(sess.created || sess.createdAt || sess.date);
+        const subItems = [...(sess.windows || []), ...allTabs];
+        const detectedTime = extractDateFromEntity(sess, subItems);
         const title = sess.name || sess.title || 'Session Buddy v3 Сессия';
 
-        sessionsToImport.push({
-          id: 'sb_' + time + '_' + Math.random().toString(36).substr(2, 5),
-          name: title,
+        rawSessions.push({
+          rawEntity: sess,
           title: title,
-          timestamp: time,
-          createdAt: time,
+          detectedTimestamp: detectedTime,
           windowCount: (sess.windows || []).length || 1,
           tabCount: tabs.length,
           groupCount: 0,
@@ -1178,7 +1348,46 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
 
-    return sessionsToImport;
+    if (rawSessions.length === 0) return [];
+
+    // Smart Multi-Pass Timestamp Interpolation:
+    // Any session without an explicit date inherits context from adjacent sessions
+    const total = rawSessions.length;
+    let lastKnown = null;
+    for (let i = 0; i < total; i++) {
+      if (rawSessions[i].detectedTimestamp) {
+        lastKnown = rawSessions[i].detectedTimestamp;
+      } else if (lastKnown) {
+        rawSessions[i].detectedTimestamp = lastKnown - 60000;
+        lastKnown = rawSessions[i].detectedTimestamp;
+      }
+    }
+
+    let nextKnown = null;
+    for (let i = total - 1; i >= 0; i--) {
+      if (rawSessions[i].detectedTimestamp) {
+        nextKnown = rawSessions[i].detectedTimestamp;
+      } else if (nextKnown) {
+        rawSessions[i].detectedTimestamp = nextKnown + 60000;
+        nextKnown = rawSessions[i].detectedTimestamp;
+      }
+    }
+
+    const now = Date.now();
+    return rawSessions.map((item, index) => {
+      const finalTime = item.detectedTimestamp || (now - index * 60000);
+      return {
+        id: 'sb_' + finalTime + '_' + Math.random().toString(36).substr(2, 6),
+        name: item.title,
+        title: item.title,
+        timestamp: finalTime,
+        createdAt: finalTime,
+        windowCount: item.windowCount,
+        tabCount: item.tabCount,
+        groupCount: item.groupCount,
+        data: item.data
+      };
+    });
   }
 
   // --- Session Buddy Import Button Handler ---

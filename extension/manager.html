@@ -73,7 +73,18 @@
         <!-- Saved Sessions Section -->
         <div class="nav-section-header">
           <span class="nav-section-title">Сохранённые сессии</span>
-          <span id="savedCountBadge" class="count-pill">0</span>
+          <div class="nav-section-controls">
+            <select id="sessionsSortSelect" class="sessions-sort-select" title="Сортировка сохранённых сессий">
+              <option value="date_desc">📅 Сначала новые</option>
+              <option value="date_asc">📅 Сначала старые</option>
+              <option value="name_asc">🔤 По имени (А–Я)</option>
+              <option value="name_desc">🔤 По имени (Я–А)</option>
+              <option value="tabs_desc">📑 Больше вкладок</option>
+              <option value="tabs_asc">📑 Меньше вкладок</option>
+            </select>
+            <button id="btnClearSessions" class="btn-clear-history" type="button" title="Очистить историю сохранённых сессий">🗑️</button>
+            <span id="savedCountBadge" class="count-pill">0</span>
+          </div>
         </div>
 
         <div id="savedSessionsList" class="saved-sessions-list">
