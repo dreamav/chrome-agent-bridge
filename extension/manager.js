@@ -92,6 +92,57 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function highlightQuery(text, query) {
+    if (!text) return '';
+    const safeText = String(text);
+    if (!query || !query.trim()) return escapeHtml(safeText);
+    const q = query.trim();
+    const escaped = escapeHtml(safeText);
+    const escapedQuery = escapeHtml(q);
+    const regex = new RegExp(`(${escapedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    return escaped.replace(regex, '<mark class="search-highlight">$1</mark>');
+  }
+
+  function getSessionMatchStats(session, queryLower) {
+    if (!session) return { matches: 0, hasMatch: false, titleMatch: false };
+    if (!queryLower || !queryLower.trim()) return { matches: 0, hasMatch: true, titleMatch: false };
+
+    const q = queryLower.trim().toLowerCase();
+    const nameMatch = (session.name || session.title || '').toLowerCase().includes(q);
+    let tabMatches = 0;
+
+    const windows = session.data || [];
+    for (const win of windows) {
+      for (const t of (win.tabs || [])) {
+        const text = `${t.title || ''} ${t.url || ''}`.toLowerCase();
+        if (text.includes(q)) {
+          tabMatches++;
+        }
+      }
+      for (const g of (win.groups || [])) {
+        if ((g.title || '').toLowerCase().includes(q)) {
+          tabMatches++;
+        }
+      }
+    }
+
+    return {
+      matches: tabMatches,
+      titleMatch: nameMatch,
+      hasMatch: nameMatch || (tabMatches > 0)
+    };
+  }
+
   function downloadJson(filename, jsonText) {
     const blob = new Blob([jsonText], { type: 'application/json;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -220,8 +271,38 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // --- Render Sidebar Saved Sessions ---
+  // --- Render Sidebar Saved Sessions with Smart Global Search ---
   function renderSidebarSessions() {
+    const filter = (searchQuery || '').trim().toLowerCase();
+
+    // 1. Live Session Card handling
+    if (liveSessionCard && liveSession) {
+      if (filter) {
+        const liveStats = getSessionMatchStats(liveSession, filter);
+        if (liveStats.hasMatch) {
+          liveSessionCard.style.display = 'flex';
+          liveWindowCountBadge.style.display = 'none';
+          liveTabCountBadge.style.display = '';
+          liveTabCountBadge.textContent = `🎯 ${liveStats.matches || 1} совп.`;
+          liveTabCountBadge.style.background = 'rgba(56, 189, 248, 0.25)';
+          liveTabCountBadge.style.color = '#38bdf8';
+          liveGroupCountBadge.style.display = 'none';
+        } else {
+          liveSessionCard.style.display = 'none';
+        }
+      } else {
+        liveSessionCard.style.display = 'flex';
+        liveWindowCountBadge.style.display = '';
+        liveTabCountBadge.style.display = '';
+        liveGroupCountBadge.style.display = '';
+        liveWindowCountBadge.textContent = `${liveSession.windowCount || 1} ок.`;
+        liveTabCountBadge.textContent = `${liveSession.tabCount || 0} вкл.`;
+        liveTabCountBadge.style.background = '';
+        liveTabCountBadge.style.color = '';
+        liveGroupCountBadge.textContent = `${liveSession.groupCount || 0} гр.`;
+      }
+    }
+
     if (savedSessions.length === 0) {
       savedSessionsList.innerHTML = `
         <div style="text-align: center; color: var(--text-muted); font-size: 11px; padding: 16px;">
@@ -232,17 +313,50 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    savedCountBadge.textContent = savedSessions.length;
     const sorted = getSortedSessions(savedSessions);
 
+    // Filter to only matching sessions when searching
+    let matchingList = sorted.map(s => ({
+      session: s,
+      stats: getSessionMatchStats(s, filter)
+    }));
+
+    if (filter) {
+      matchingList = matchingList.filter(item => item.stats.hasMatch);
+      savedCountBadge.textContent = `${matchingList.length}/${savedSessions.length}`;
+      savedCountBadge.title = `Найдено ${matchingList.length} сессий из ${savedSessions.length}`;
+    } else {
+      savedCountBadge.textContent = String(savedSessions.length);
+      savedCountBadge.title = `Всего ${savedSessions.length} сессий`;
+    }
+
+    if (matchingList.length === 0) {
+      savedSessionsList.innerHTML = `
+        <div style="text-align: center; color: var(--text-muted); font-size: 12px; padding: 24px 12px; line-height: 1.5;">
+          🔍 По запросу «<strong style="color: #fff;">${escapeHtml(filter)}</strong>» совпадений не найдено.<br>
+          <button id="btnResetSearchInline" style="margin-top: 10px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.3); color: #38bdf8; border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 11px;">Сбросить поиск</button>
+        </div>
+      `;
+      const btnReset = document.getElementById('btnResetSearchInline');
+      if (btnReset) {
+        btnReset.addEventListener('click', () => {
+          searchInput.value = '';
+          searchQuery = '';
+          btnClearSearch.classList.add('hidden');
+          handleSearchUpdate();
+        });
+      }
+      return;
+    }
+
     savedSessionsList.innerHTML = '';
-    sorted.forEach((session) => {
+    matchingList.forEach(({ session, stats }) => {
       const isSelected = activeSession && activeSession.id === session.id;
       const card = document.createElement('div');
       card.className = `session-nav-item ${isSelected ? 'active' : ''}`;
       card.setAttribute('data-id', session.id);
 
-      const sDate = new Date(session.timestamp || Date.now());
+      const sDate = new Date(session.timestamp || session.createdAt || Date.now());
       const isCurrentYear = sDate.getFullYear() === new Date().getFullYear();
       const dateStr = sDate.toLocaleString('ru-RU', {
         day: '2-digit',
@@ -252,11 +366,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         minute: '2-digit'
       });
 
+      const matchPill = filter
+        ? `<span class="meta-pill match-pill">🎯 ${stats.matches || 1} совп.</span>`
+        : '';
+
+      const sessionName = session.name || session.title || 'Сессия';
+
       card.innerHTML = `
         <div class="session-nav-icon">💾</div>
         <div class="session-nav-info">
-          <div class="session-nav-title" title="${session.name}">${session.name}</div>
+          <div class="session-nav-title" title="${escapeHtml(sessionName)}">${highlightQuery(sessionName, filter)}</div>
           <div class="session-nav-meta">
+            ${matchPill}
             <span class="session-nav-date">${dateStr}</span>
             <span class="meta-pill">${session.windowCount || 1} ок.</span>
             <span class="meta-pill">${session.tabCount || 0} вкл.</span>
@@ -358,19 +479,31 @@ document.addEventListener('DOMContentLoaded', async () => {
   function renderWindowsAndGroups() {
     sessionContent.innerHTML = '';
 
-    const filter = searchQuery.trim().toLowerCase();
+    const filter = (searchQuery || '').trim().toLowerCase();
     let totalMatches = 0;
 
-    const windows = activeSession.data || [];
+    const windows = activeSession ? (activeSession.data || []) : [];
 
-    if (windows.length === 0) {
+    if (!activeSession || windows.length === 0) {
       sessionContent.innerHTML = `
         <div style="text-align: center; color: var(--text-muted); font-size: 13px; padding: 40px;">
-          В этой сессии нет открытых окон или вкладок.
+          ${filter ? `В этой сессии нет вкладок по запросу «${escapeHtml(filter)}».` : 'В этой сессии нет открытых окон или вкладок.'}
         </div>
       `;
+      if (filter) {
+        searchBanner.classList.remove('hidden');
+        searchMatchCount.textContent = '0';
+        searchQueryText.textContent = filter;
+      } else {
+        searchBanner.classList.add('hidden');
+      }
       return;
     }
+
+    const sessionTitleMatches = (activeSession.name || activeSession.title || '').toLowerCase().includes(filter);
+    const hasAnyTabMatch = windows.some(w =>
+      (w.tabs || []).some(t => `${t.title || ''} ${t.url || ''}`.toLowerCase().includes(filter))
+    );
 
     windows.forEach((win, winIndex) => {
       const winTabs = win.tabs || [];
@@ -394,8 +527,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Filter tabs if search is active
       const matchesTab = (t) => {
         if (!filter) return true;
-        const text = `${t.title || ''} ${t.url || ''}`.toLowerCase();
-        return text.includes(filter);
+        if (hasAnyTabMatch) {
+          const text = `${t.title || ''} ${t.url || ''}`.toLowerCase();
+          return text.includes(filter);
+        }
+        return sessionTitleMatches;
       };
 
       const filteredUngrouped = ungroupedTabs.filter(matchesTab);
@@ -404,8 +540,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       const filteredGroups = [];
       winGroups.forEach(g => {
         const tabsInGroup = groupedTabsMap.get(g.id) || [];
-        const filteredGroupTabs = tabsInGroup.filter(matchesTab);
-        if (filteredGroupTabs.length > 0 || !filter) {
+        const groupTitleMatch = (g.title || '').toLowerCase().includes(filter);
+        const filteredGroupTabs = tabsInGroup.filter(t => matchesTab(t) || groupTitleMatch);
+        if (filteredGroupTabs.length > 0 || (!filter && tabsInGroup.length > 0)) {
           filteredGroups.push({
             groupDef: g,
             tabs: filteredGroupTabs
@@ -546,6 +683,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       searchBanner.classList.remove('hidden');
       searchMatchCount.textContent = totalMatches;
       searchQueryText.textContent = filter;
+
+      if (totalMatches === 0) {
+        sessionContent.innerHTML = `
+          <div style="text-align: center; color: var(--text-muted); font-size: 13px; padding: 50px 20px;">
+            В сессии «<strong>${escapeHtml(activeSession?.name || activeSession?.title || 'сессия')}</strong>» не найдено вкладок по запросу «${escapeHtml(filter)}».
+          </div>
+        `;
+      }
     } else {
       searchBanner.classList.add('hidden');
     }
@@ -854,8 +999,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     item.innerHTML = `
       <div class="tab-favicon">${faviconHtml}</div>
       <div class="tab-details">
-        <span class="tab-title">${escapeHtml(tab.title || tab.url || 'Новая вкладка')}</span>
-        <span class="tab-domain">${escapeHtml(domain)}</span>
+        <span class="tab-title">${highlightQuery(tab.title || tab.url || 'Новая вкладка', searchQuery)}</span>
+        <span class="tab-domain">${highlightQuery(domain, searchQuery)}</span>
       </div>
       <div class="tab-badges-group">
         ${pinnedBadge}
@@ -922,16 +1067,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     return item;
-  }
-
-  function escapeHtml(str) {
-    if (!str) return '';
-    return str
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
   }
 
   // --- Restoration Actions ---
@@ -1039,29 +1174,117 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // --- Search & Input Handlers ---
+  // --- Search & Input Handlers with Global Session Matching ---
+  function handleSearchUpdate() {
+    renderSidebarSessions();
+
+    const filter = (searchQuery || '').trim().toLowerCase();
+    if (filter) {
+      // Check if current activeSession has matches
+      const currentStats = activeSession ? getSessionMatchStats(activeSession, filter) : { hasMatch: false };
+
+      if (!currentStats.hasMatch) {
+        // Automatically switch to the first session that has matches
+        let firstMatch = null;
+        if (liveSession && getSessionMatchStats(liveSession, filter).hasMatch) {
+          firstMatch = liveSession;
+        } else {
+          const sorted = getSortedSessions(savedSessions);
+          firstMatch = sorted.find(s => getSessionMatchStats(s, filter).hasMatch);
+        }
+
+        if (firstMatch) {
+          selectSession(firstMatch);
+        } else {
+          // No matches in ANY session in the manager
+          renderGlobalNoMatches(filter);
+        }
+      } else {
+        renderActiveSessionDetails();
+      }
+    } else {
+      if (!activeSession) {
+        if (liveSession) {
+          selectSession(liveSession);
+        } else if (savedSessions.length > 0) {
+          selectSession(savedSessions[0]);
+        }
+      } else {
+        renderActiveSessionDetails();
+      }
+    }
+  }
+
+  function renderGlobalNoMatches(filter) {
+    selectedSessionTitle.textContent = 'Поиск по всем сессиям';
+    selectedSessionTag.textContent = '0 СОВПАДЕНИЙ';
+    selectedSessionTag.className = 'session-tag';
+    metaDate.textContent = `Поисковый запрос: «${filter}»`;
+    metaStats.textContent = `Проверено ${savedSessions.length + (liveSession ? 1 : 0)} сессий`;
+    btnSaveLiveAsNew.classList.add('hidden');
+    btnDeleteCurrent.classList.add('hidden');
+    btnRefreshLive.classList.add('hidden');
+    btnRestoreAll.style.display = 'none';
+
+    searchBanner.classList.remove('hidden');
+    searchMatchCount.textContent = '0';
+    searchQueryText.textContent = filter;
+
+    sessionContent.innerHTML = `
+      <div style="text-align: center; color: var(--text-muted); padding: 60px 20px;">
+        <div style="font-size: 38px; margin-bottom: 14px;">🔍</div>
+        <div style="font-size: 16px; font-weight: 600; color: #fff; margin-bottom: 8px;">Ничего не найдено</div>
+        <div style="font-size: 13px; max-width: 440px; margin: 0 auto 16px auto; line-height: 1.5; color: var(--text-muted);">
+          Ни в одной из ${savedSessions.length + (liveSession ? 1 : 0)} сессий не найдено вкладок или групп по запросу «<strong style="color: #38bdf8;">${escapeHtml(filter)}</strong>».
+        </div>
+        <button id="btnResetFilterGlobal" class="btn btn-secondary" style="display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; font-size: 12px; margin: 0 auto; cursor: pointer;">
+          <span>✕</span> Очистить поисковый запрос
+        </button>
+      </div>
+    `;
+
+    const btnResetGlobal = document.getElementById('btnResetFilterGlobal');
+    if (btnResetGlobal) {
+      btnResetGlobal.addEventListener('click', () => {
+        searchInput.value = '';
+        searchQuery = '';
+        btnClearSearch.classList.add('hidden');
+        handleSearchUpdate();
+      });
+    }
+  }
+
   searchInput.addEventListener('input', () => {
-    searchQuery = searchInput.value;
+    searchQuery = searchInput.value.trim().toLowerCase();
     if (searchQuery) {
       btnClearSearch.classList.remove('hidden');
     } else {
       btnClearSearch.classList.add('hidden');
     }
-    renderWindowsAndGroups();
+    handleSearchUpdate();
+  });
+
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      searchInput.value = '';
+      searchQuery = '';
+      btnClearSearch.classList.add('hidden');
+      handleSearchUpdate();
+    }
   });
 
   btnClearSearch.addEventListener('click', () => {
     searchInput.value = '';
     searchQuery = '';
     btnClearSearch.classList.add('hidden');
-    renderWindowsAndGroups();
+    handleSearchUpdate();
   });
 
   btnResetFilter.addEventListener('click', () => {
     searchInput.value = '';
     searchQuery = '';
     btnClearSearch.classList.add('hidden');
-    renderWindowsAndGroups();
+    handleSearchUpdate();
   });
 
   // --- Header Action Buttons ---

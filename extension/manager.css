@@ -1432,3 +1432,23 @@ html, body {
   color: #fff;
   transform: translateY(-1px);
 }
+
+/* ==========================================================================
+   Search Highlighting & Match Badges
+   ========================================================================== */
+.search-highlight {
+  background: rgba(250, 204, 21, 0.35);
+  color: #fef08a;
+  border-radius: 3px;
+  padding: 0 3px;
+  font-weight: 600;
+  text-shadow: 0 0 6px rgba(250, 204, 21, 0.4);
+}
+
+.meta-pill.match-pill {
+  background: rgba(56, 189, 248, 0.22);
+  color: #38bdf8;
+  font-weight: 600;
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.25);
+}
