@@ -164,20 +164,40 @@ document.addEventListener('DOMContentLoaded', async () => {
         showToast('Список сохранённых сессий уже пуст.');
         return;
       }
-      const count = savedSessions.length;
-      const confirmed = confirm(
-        `🗑️ Удалить ВСЕ ${count} сохранённых сессий из памяти?\n\n` +
-        `Это действие полностью очистит сохранённую историю, и вы сможете сделать чистый импорт заново с правильными датами.`
-      );
-      if (!confirmed) return;
+      const imported = savedSessions.filter(s => s && s.id && s.id.startsWith('sb_'));
+      const native = savedSessions.filter(s => s && s.id && !s.id.startsWith('sb_'));
 
-      await chrome.storage.local.set({ saved_sessions: [] });
-      savedSessions = [];
-      if (activeSession && !activeSession.isLive) {
-        selectSession(liveSession);
+      if (imported.length > 0 && native.length > 0) {
+        const choice = confirm(
+          `Найдено:\n` +
+          `• ${imported.length} импортированных сессий из Session Buddy\n` +
+          `• ${native.length} ваших родных сессий Chrome Bridge\n\n` +
+          `Нажмите «OK», чтобы удалить ТОЛЬКО сессии из Session Buddy (${imported.length} шт.), сохранив вашу родную сессию!\n\n` +
+          `Нажмите «Отмена», чтобы отменить.`
+        );
+        if (!choice) return;
+
+        await chrome.storage.local.set({ saved_sessions: native });
+        savedSessions = native;
+        showToast(`🧹 Удалено ${imported.length} сессий Session Buddy. Ваша родная сессия сохранена!`);
+      } else {
+        const count = savedSessions.length;
+        const choice = confirm(`🗑️ Удалить все сохранённые сессии (${count} шт.)?`);
+        if (!choice) return;
+
+        await chrome.storage.local.set({ saved_sessions: [] });
+        savedSessions = [];
+        showToast(`История очищена.`);
+      }
+
+      if (activeSession && !activeSession.isLive && !savedSessions.find(s => s.id === activeSession.id)) {
+        if (savedSessions.length > 0) {
+          selectSession(savedSessions[0]);
+        } else if (liveSession) {
+          selectSession(liveSession);
+        }
       }
       renderSidebarSessions();
-      showToast(`История очищена: удалено ${count} сессий.`);
     });
   }
 
@@ -1581,10 +1601,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   checkWsStatus();
   await fetchLiveSession();
   await fetchSavedSessions();
+
+  // Автоматическая очистка импортированных из Session Buddy сессий:
+  // Удаляет все сессии sb_*, оставляя только родные ('session_*')
+  const stored = await chrome.storage.local.get(['saved_sessions']);
+  const allSaved = Array.isArray(stored.saved_sessions) ? stored.saved_sessions : [];
+  const nativeOnly = allSaved.filter(s => s && s.id && !s.id.startsWith('sb_'));
+  const sbCount = allSaved.length - nativeOnly.length;
+  if (sbCount > 0) {
+    await chrome.storage.local.set({ saved_sessions: nativeOnly });
+    savedSessions = nativeOnly;
+    showToast(`🧹 Удалено ${sbCount} сессий Session Buddy. Ваша родная сессия сохранена!`, 4000);
+  }
+
   renderSidebarSessions();
 
-  // Select live session by default on initial page load
-  if (liveSession) {
+  // Select first saved session if exists, otherwise live session
+  if (savedSessions.length > 0) {
+    selectSession(savedSessions[0]);
+  } else if (liveSession) {
     selectSession(liveSession);
   }
 });
