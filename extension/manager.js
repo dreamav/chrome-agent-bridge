@@ -964,7 +964,212 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnSaveCurrent.addEventListener('click', handleSaveCurrent);
   btnSaveLiveAsNew.addEventListener('click', handleSaveCurrent);
 
-  // Import JSON file
+  // ==========================================================================
+  // SESSION BUDDY IMPORT (v3 and v4 JSON formats)
+  // ==========================================================================
+  function parseSessionBuddyJSON(data) {
+    const sessionsToImport = [];
+    const CHROME_COLORS = ['blue', 'cyan', 'green', 'yellow', 'orange', 'red', 'pink', 'purple', 'grey'];
+
+    function parseTimestamp(val) {
+      if (!val) return Date.now();
+      if (typeof val === 'number') {
+        return val < 1e11 ? val * 1000 : val;
+      }
+      const parsed = new Date(val).getTime();
+      return isNaN(parsed) ? Date.now() : parsed;
+    }
+
+    // Normalize wrapped structure or raw array
+    let collections = null;
+    let sessions = null;
+
+    if (data && Array.isArray(data.collections)) {
+      collections = data.collections;
+    } else if (data && data.folders && (Array.isArray(data.folders) || Array.isArray(data.links))) {
+      collections = [data];
+    } else if (data && Array.isArray(data.sessions)) {
+      sessions = data.sessions;
+    } else if (data && data.windows && Array.isArray(data.windows)) {
+      sessions = [data];
+    } else if (Array.isArray(data)) {
+      if (data.some(item => item && (item.folders || (item.links && !item.windows)))) {
+        collections = data;
+      } else if (data.some(item => item && item.windows)) {
+        sessions = data;
+      }
+    }
+
+    // 1. Формат v4 (современный: collections -> folders -> links)
+    if (collections && Array.isArray(collections)) {
+      for (const col of collections) {
+        if (!col) continue;
+        const groups = [];
+        const tabs = [];
+        let groupIdCounter = 1;
+
+        for (const folder of (col.folders || [])) {
+          if (!folder) continue;
+          const gId = groupIdCounter++;
+          const color = CHROME_COLORS[(gId - 1) % CHROME_COLORS.length];
+          groups.push({
+            id: gId,
+            title: folder.title || `Импортированная группа ${gId}`,
+            color: color,
+            collapsed: false
+          });
+
+          for (const link of (folder.links || [])) {
+            if (!link || !link.url) continue;
+            tabs.push({
+              title: link.title || link.url,
+              url: link.url,
+              groupId: gId,
+              pinned: false
+            });
+          }
+        }
+
+        // Поддержка ссылок верхнего уровня коллекции (вне папок)
+        for (const link of (col.links || [])) {
+          if (!link || !link.url) continue;
+          tabs.push({
+            title: link.title || link.url,
+            url: link.url,
+            groupId: -1,
+            pinned: false
+          });
+        }
+
+        if (tabs.length === 0 && groups.length === 0) continue;
+
+        const time = parseTimestamp(col.created || col.createdAt || col.modified);
+        const title = col.title || col.name || 'Session Buddy Экспорт';
+
+        sessionsToImport.push({
+          id: 'sb_' + time + '_' + Math.random().toString(36).substr(2, 5),
+          name: title,
+          title: title,
+          timestamp: time,
+          createdAt: time,
+          windowCount: 1,
+          tabCount: tabs.length,
+          groupCount: groups.length,
+          data: [{ groups, tabs }]
+        });
+      }
+    }
+    // 2. Формат v3 (legacy: sessions -> windows -> tabs)
+    else if (sessions && Array.isArray(sessions)) {
+      for (const sess of sessions) {
+        if (!sess) continue;
+        const tabs = [];
+        for (const win of (sess.windows || [])) {
+          for (const t of (win.tabs || [])) {
+            if (!t || !t.url) continue;
+            tabs.push({
+              title: t.title || t.url,
+              url: t.url,
+              groupId: -1,
+              pinned: Boolean(t.pinned)
+            });
+          }
+        }
+
+        if (tabs.length === 0 && (sess.tabs || []).length > 0) {
+          for (const t of sess.tabs) {
+            if (!t || !t.url) continue;
+            tabs.push({
+              title: t.title || t.url,
+              url: t.url,
+              groupId: -1,
+              pinned: Boolean(t.pinned)
+            });
+          }
+        }
+
+        if (tabs.length === 0) continue;
+
+        const time = parseTimestamp(sess.created || sess.createdAt || sess.date);
+        const title = sess.name || sess.title || 'Session Buddy v3 Сессия';
+
+        sessionsToImport.push({
+          id: 'sb_' + time + '_' + Math.random().toString(36).substr(2, 5),
+          name: title,
+          title: title,
+          timestamp: time,
+          createdAt: time,
+          windowCount: (sess.windows || []).length || 1,
+          tabCount: tabs.length,
+          groupCount: 0,
+          data: [{ groups: [], tabs }]
+        });
+      }
+    }
+
+    return sessionsToImport;
+  }
+
+  // --- Session Buddy Import Button Handler ---
+  const importSessionBuddyBtn = document.getElementById('importSessionBuddyBtn');
+  const sessionBuddyFileInput = document.getElementById('sessionBuddyFileInput');
+
+  if (importSessionBuddyBtn && sessionBuddyFileInput) {
+    importSessionBuddyBtn.addEventListener('click', () => {
+      sessionBuddyFileInput.value = '';
+      sessionBuddyFileInput.click();
+    });
+
+    sessionBuddyFileInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const jsonContent = event.target.result;
+          const data = JSON.parse(jsonContent);
+          const sessionsToImport = parseSessionBuddyJSON(data);
+
+          if (!sessionsToImport || sessionsToImport.length === 0) {
+            showToast('В файле не найдено сессий Session Buddy (v3 или v4).');
+            return;
+          }
+
+          // Мерджим в наш chrome.storage.local с существующими сохраненными сессиями
+          const stored = await chrome.storage.local.get(['saved_sessions']);
+          const existing = Array.isArray(stored.saved_sessions) ? stored.saved_sessions : [];
+
+          // Проверяем на дубликаты по имени и таймстемпу
+          const existingKeys = new Set(existing.map(s => `${s.name}_${s.timestamp}`));
+          const uniqueToImport = sessionsToImport.filter(s => !existingKeys.has(`${s.name}_${s.timestamp}`));
+
+          if (uniqueToImport.length === 0) {
+            showToast('Все сессии из этого файла Session Buddy уже присутствуют в списке.');
+            return;
+          }
+
+          const merged = [...uniqueToImport, ...existing];
+          await chrome.storage.local.set({ saved_sessions: merged });
+
+          // Перерисовываем список сессий в интерфейсе
+          await fetchSavedSessions();
+          renderSidebarSessions();
+          selectSession(uniqueToImport[0]);
+
+          const totalTabs = uniqueToImport.reduce((sum, s) => sum + (s.tabCount || 0), 0);
+          showToast(`✨ Успешно импортировано ${uniqueToImport.length} сессий (${totalTabs} вкл.) из Session Buddy!`);
+        } catch (err) {
+          console.error('[SessionBuddy Import Error]', err);
+          showToast(`Ошибка парсинга Session Buddy: ${err.message}`);
+        }
+      };
+
+      reader.readAsText(file);
+    });
+  }
+
+  // Sidebar Import JSON file (with Session Buddy fallback)
   btnImportJson.addEventListener('click', () => {
     importFileInput.value = '';
     importFileInput.click();
@@ -975,9 +1180,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       try {
         const jsonContent = event.target.result;
+        const data = JSON.parse(jsonContent);
+
+        // Smart check: If file is Session Buddy format, parse and import directly!
+        if (data && (data.collections || data.sessions || (data.folders && !data.data))) {
+          const sessionsToImport = parseSessionBuddyJSON(data);
+          if (sessionsToImport && sessionsToImport.length > 0) {
+            const stored = await chrome.storage.local.get(['saved_sessions']);
+            const existing = Array.isArray(stored.saved_sessions) ? stored.saved_sessions : [];
+            const existingKeys = new Set(existing.map(s => `${s.name}_${s.timestamp}`));
+            const uniqueToImport = sessionsToImport.filter(s => !existingKeys.has(`${s.name}_${s.timestamp}`));
+
+            if (uniqueToImport.length > 0) {
+              const merged = [...uniqueToImport, ...existing];
+              await chrome.storage.local.set({ saved_sessions: merged });
+              await fetchSavedSessions();
+              renderSidebarSessions();
+              selectSession(uniqueToImport[0]);
+              const totalTabs = uniqueToImport.reduce((sum, s) => sum + (s.tabCount || 0), 0);
+              showToast(`✨ Импортировано ${uniqueToImport.length} сессий (${totalTabs} вкл.) из Session Buddy!`);
+              return;
+            }
+          }
+        }
+
+        // Native session JSON import
         chrome.runtime.sendMessage({
           action: 'import_session_json',
           params: { json: jsonContent }
