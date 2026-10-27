@@ -1119,294 +1119,158 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnSaveLiveAsNew.addEventListener('click', handleSaveCurrent);
 
   // ==========================================================================
-  // SESSION BUDDY IMPORT (v3 and v4 JSON formats)
+  // SESSION BUDDY OFFICIAL BACKUP IMPORT (nxs.json.v2)
+  // Exact created timestamps (ms), collections -> folders -> links
   // ==========================================================================
-  function parseSessionBuddyJSON(data) {
-    const rawSessions = [];
+  async function importSessionBuddyBackup(file) {
+    let text;
+    try {
+      text = await file.text();
+    } catch (e) {
+      alert('Ошибка чтения файла: ' + e.message);
+      return;
+    }
+
+    // Strip BOM if present
+    if (text.charCodeAt(0) === 0xFEFF) {
+      text = text.slice(1);
+    }
+
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch (err) {
+      alert('Ошибка чтения JSON: ' + err.message);
+      return;
+    }
+
+    // Поддерживаем официальный бэкап nxs.json.v2 (data.collections), прямой json.collections или массив
+    const rawCollections = (json.data && Array.isArray(json.data.collections))
+      ? json.data.collections
+      : (Array.isArray(json.collections) ? json.collections : (Array.isArray(json) ? json : []));
+    if (!rawCollections || !rawCollections.length) {
+      alert('В файле не найдены коллекции Session Buddy.');
+      return;
+    }
+
     const CHROME_COLORS = ['blue', 'cyan', 'green', 'yellow', 'orange', 'red', 'pink', 'purple', 'grey'];
 
-    const CANDIDATE_DATE_PROPS = [
-      'created', 'createdAt', 'creationDate', 'creation_date',
-      'timestamp', 'time', 'dateTime', 'date', 'dateCreated',
-      'modified', 'updated', 'updatedAt', 'lastModified', 'dateModified',
-      'mtime', 'ctime', 'saved', 'saveDate'
-    ];
+    const importedSessions = rawCollections.map((col, idx) => {
+      // 1. Точное время создания из бэкапа (если нет - берем Date.now())
+      const createdAt = typeof col.created === 'number'
+        ? col.created
+        : (Date.parse(col.created) || (Date.now() - idx * 1000));
 
-    function tryParseValue(val) {
-      if (val === null || val === undefined) return null;
-      if (typeof val === 'number' && !isNaN(val)) {
-        const ms = val < 1e11 ? val * 1000 : val;
-        if (ms > 946684800000 && ms < 2208988800000) { // between 2000 and 2040
-          return ms;
-        }
-      }
-      if (typeof val === 'string' && val.trim()) {
-        const trimmed = val.trim();
-        const parsed = Date.parse(trimmed);
-        if (!isNaN(parsed) && parsed > 946684800000 && parsed < 2208988800000) {
-          return parsed;
-        }
-        if (/^\d{10,13}$/.test(trimmed)) {
-          const num = Number(trimmed);
-          const ms = num < 1e11 ? num * 1000 : num;
-          if (ms > 946684800000 && ms < 2208988800000) {
-            return ms;
-          }
-        }
-      }
-      return null;
-    }
+      const sessionTitle = col.title || ('Сессия от ' + new Date(createdAt).toLocaleDateString('ru-RU'));
 
-    function tryParseDateFromString(str) {
-      if (!str || typeof str !== 'string') return null;
+      // 2. Окна и группы вкладок
+      let totalTabs = 0;
+      let totalGroups = 0;
 
-      // Pattern A: YYYY-MM-DD or YYYY.MM.DD or YYYY/MM/DD or YYYY MM DD
-      // e.g. "2018 11 24", "2018 11 24 11 24", "2018-11-24 14:30"
-      const patternA = /\b(20\d\d)[.\-\/ ](0?[1-9]|1[0-2])[.\-\/ ](0?[1-9]|[12]\d|3[01])(?:[ ,T_]+([01]?\d|2[0-3])[:. ]([0-5]\d)(?:[:. ]([0-5]\d))?)?\b/;
-      const matchA = str.match(patternA);
-      if (matchA) {
-        const year = parseInt(matchA[1], 10);
-        const month = parseInt(matchA[2], 10) - 1;
-        const day = parseInt(matchA[3], 10);
-        const hour = matchA[4] ? parseInt(matchA[4], 10) : 12;
-        const min = matchA[5] ? parseInt(matchA[5], 10) : 0;
-        const sec = matchA[6] ? parseInt(matchA[6], 10) : 0;
-        const dt = new Date(year, month, day, hour, min, sec);
-        if (!isNaN(dt.getTime())) return dt.getTime();
-      }
+      const windows = (col.folders || []).map((folder, fIdx) => {
+        const hasGroupTitle = Boolean(folder.title && folder.title.trim());
+        const groupId = hasGroupTitle ? (fIdx + 1) : -1;
+        const color = CHROME_COLORS[fIdx % CHROME_COLORS.length];
 
-      // Pattern B: DD.MM.YYYY or DD-MM-YYYY or DD/MM/YYYY
-      // e.g. "24.11.2018 14:30", "24-11-2018"
-      const patternB = /\b(0?[1-9]|[12]\d|3[01])[.\-\/](0?[1-9]|1[0-2])[.\-\/](20\d\d)(?:[ ,T_]+([01]?\d|2[0-3])[:. ]([0-5]\d)(?:[:. ]([0-5]\d))?)?\b/;
-      const matchB = str.match(patternB);
-      if (matchB) {
-        const day = parseInt(matchB[1], 10);
-        const month = parseInt(matchB[2], 10) - 1;
-        const year = parseInt(matchB[3], 10);
-        const hour = matchB[4] ? parseInt(matchB[4], 10) : 12;
-        const min = matchB[5] ? parseInt(matchB[5], 10) : 0;
-        const sec = matchB[6] ? parseInt(matchB[6], 10) : 0;
-        const dt = new Date(year, month, day, hour, min, sec);
-        if (!isNaN(dt.getTime())) return dt.getTime();
-      }
+        const tabs = (folder.links || []).map((link, lIdx) => {
+          totalTabs++;
+          return {
+            id: lIdx + 1,
+            index: lIdx,
+            title: link.title || link.url || 'Вкладка без названия',
+            url: link.url || '',
+            favIconUrl: link.favIconUrl || '',
+            pinned: Boolean(link.pinned),
+            groupId: groupId
+          };
+        });
 
-      // Pattern C: MM/DD/YYYY (US format common in Session Buddy)
-      const patternC = /\b(0?[1-9]|1[0-2])\/(0?[1-9]|[12]\d|3[01])\/(20\d\d)(?:[ ,T_]+([01]?\d|2[0-3])[:. ]([0-5]\d)(?:[:. ]([0-5]\d))?)?\b/;
-      const matchC = str.match(patternC);
-      if (matchC) {
-        const month = parseInt(matchC[1], 10) - 1;
-        const day = parseInt(matchC[2], 10);
-        const year = parseInt(matchC[3], 10);
-        const hour = matchC[4] ? parseInt(matchC[4], 10) : 12;
-        const min = matchC[5] ? parseInt(matchC[5], 10) : 0;
-        const sec = matchC[6] ? parseInt(matchC[6], 10) : 0;
-        const dt = new Date(year, month, day, hour, min, sec);
-        if (!isNaN(dt.getTime())) return dt.getTime();
-      }
+        const groups = hasGroupTitle ? [{
+          id: groupId,
+          title: folder.title.trim(),
+          color: color,
+          collapsed: false
+        }] : [];
 
-      // Pattern D: Textual English date e.g. "Nov 24, 2018"
-      const parsedDirect = Date.parse(str);
-      if (!isNaN(parsedDirect) && parsedDirect > 946684800000 && parsedDirect < 2208988800000) {
-        return parsedDirect;
-      }
-
-      return null;
-    }
-
-    function extractDateFromEntity(entity, subItems = []) {
-      if (!entity) return null;
-      // 1. Direct properties on entity
-      for (const prop of CANDIDATE_DATE_PROPS) {
-        const res = tryParseValue(entity[prop]);
-        if (res !== null) return res;
-      }
-      // 2. Direct properties on sub-items (folders, windows, tabs, links)
-      for (const sub of subItems) {
-        if (!sub) continue;
-        for (const prop of CANDIDATE_DATE_PROPS) {
-          const res = tryParseValue(sub[prop]);
-          if (res !== null) return res;
-        }
-      }
-      // 3. String date in entity title / name
-      const titleRes = tryParseDateFromString(entity.title || entity.name);
-      if (titleRes !== null) return titleRes;
-      // 4. String date in sub-items title / name
-      for (const sub of subItems) {
-        if (!sub) continue;
-        const subTitleRes = tryParseDateFromString(sub.title || sub.name);
-        if (subTitleRes !== null) return subTitleRes;
-      }
-      return null;
-    }
-
-    // Normalize wrapped structure or raw array
-    let collections = null;
-    let sessions = null;
-
-    if (data && Array.isArray(data.collections)) {
-      collections = data.collections;
-    } else if (data && data.folders && (Array.isArray(data.folders) || Array.isArray(data.links))) {
-      collections = [data];
-    } else if (data && Array.isArray(data.sessions)) {
-      sessions = data.sessions;
-    } else if (data && data.windows && Array.isArray(data.windows)) {
-      sessions = [data];
-    } else if (Array.isArray(data)) {
-      if (data.some(item => item && (item.folders || (item.links && !item.windows)))) {
-        collections = data;
-      } else if (data.some(item => item && item.windows)) {
-        sessions = data;
-      }
-    }
-
-    // 1. Формат v4 (современный: collections -> folders -> links)
-    if (collections && Array.isArray(collections)) {
-      for (const col of collections) {
-        if (!col) continue;
-        const groups = [];
-        const tabs = [];
-        let groupIdCounter = 1;
-
-        for (const folder of (col.folders || [])) {
-          if (!folder) continue;
-          const gId = groupIdCounter++;
-          const color = CHROME_COLORS[(gId - 1) % CHROME_COLORS.length];
-          groups.push({
-            id: gId,
-            title: folder.title || `Импортированная группа ${gId}`,
-            color: color,
-            collapsed: false
-          });
-
-          for (const link of (folder.links || [])) {
-            if (!link || !link.url) continue;
-            tabs.push({
-              title: link.title || link.url,
-              url: link.url,
-              groupId: gId,
-              pinned: false
-            });
-          }
+        if (hasGroupTitle) {
+          totalGroups++;
         }
 
-        // Поддержка ссылок верхнего уровня коллекции (вне папок)
-        for (const link of (col.links || [])) {
-          if (!link || !link.url) continue;
-          tabs.push({
-            title: link.title || link.url,
-            url: link.url,
-            groupId: -1,
-            pinned: false
-          });
-        }
+        return {
+          windowId: fIdx + 1,
+          focused: false,
+          state: folder.state || 'normal',
+          groups: groups,
+          tabs: tabs
+        };
+      });
 
-        if (tabs.length === 0 && groups.length === 0) continue;
-
-        const subItems = [...(col.folders || []), ...(col.links || [])];
-        const detectedTime = extractDateFromEntity(col, subItems);
-        const title = col.title || col.name || 'Session Buddy Экспорт';
-
-        rawSessions.push({
-          rawEntity: col,
-          title: title,
-          detectedTimestamp: detectedTime,
-          windowCount: 1,
-          tabCount: tabs.length,
-          groupCount: groups.length,
-          data: [{ groups, tabs }]
+      // Если есть ссылки верхнего уровня вне папок
+      if (Array.isArray(col.links) && col.links.length > 0) {
+        const rootTabs = col.links.map((link, lIdx) => {
+          totalTabs++;
+          return {
+            id: totalTabs,
+            index: lIdx,
+            title: link.title || link.url || 'Вкладка без названия',
+            url: link.url || '',
+            favIconUrl: link.favIconUrl || '',
+            pinned: Boolean(link.pinned),
+            groupId: -1
+          };
+        });
+        windows.unshift({
+          windowId: 0,
+          focused: false,
+          state: 'normal',
+          groups: [],
+          tabs: rootTabs
         });
       }
-    }
-    // 2. Формат v3 (legacy: sessions -> windows -> tabs)
-    else if (sessions && Array.isArray(sessions)) {
-      for (const sess of sessions) {
-        if (!sess) continue;
-        const tabs = [];
-        const allTabs = [];
-        for (const win of (sess.windows || [])) {
-          for (const t of (win.tabs || [])) {
-            if (!t || !t.url) continue;
-            tabs.push({
-              title: t.title || t.url,
-              url: t.url,
-              groupId: -1,
-              pinned: Boolean(t.pinned)
-            });
-            allTabs.push(t);
-          }
-        }
 
-        if (tabs.length === 0 && (sess.tabs || []).length > 0) {
-          for (const t of sess.tabs) {
-            if (!t || !t.url) continue;
-            tabs.push({
-              title: t.title || t.url,
-              url: t.url,
-              groupId: -1,
-              pinned: Boolean(t.pinned)
-            });
-            allTabs.push(t);
-          }
-        }
-
-        if (tabs.length === 0) continue;
-
-        const subItems = [...(sess.windows || []), ...allTabs];
-        const detectedTime = extractDateFromEntity(sess, subItems);
-        const title = sess.name || sess.title || 'Session Buddy v3 Сессия';
-
-        rawSessions.push({
-          rawEntity: sess,
-          title: title,
-          detectedTimestamp: detectedTime,
-          windowCount: (sess.windows || []).length || 1,
-          tabCount: tabs.length,
-          groupCount: 0,
-          data: [{ groups: [], tabs }]
-        });
-      }
-    }
-
-    if (rawSessions.length === 0) return [];
-
-    // Smart Multi-Pass Timestamp Interpolation:
-    // Any session without an explicit date inherits context from adjacent sessions
-    const total = rawSessions.length;
-    let lastKnown = null;
-    for (let i = 0; i < total; i++) {
-      if (rawSessions[i].detectedTimestamp) {
-        lastKnown = rawSessions[i].detectedTimestamp;
-      } else if (lastKnown) {
-        rawSessions[i].detectedTimestamp = lastKnown - 60000;
-        lastKnown = rawSessions[i].detectedTimestamp;
-      }
-    }
-
-    let nextKnown = null;
-    for (let i = total - 1; i >= 0; i--) {
-      if (rawSessions[i].detectedTimestamp) {
-        nextKnown = rawSessions[i].detectedTimestamp;
-      } else if (nextKnown) {
-        rawSessions[i].detectedTimestamp = nextKnown + 60000;
-        nextKnown = rawSessions[i].detectedTimestamp;
-      }
-    }
-
-    const now = Date.now();
-    return rawSessions.map((item, index) => {
-      const finalTime = item.detectedTimestamp || (now - index * 60000);
       return {
-        id: 'sb_' + finalTime + '_' + Math.random().toString(36).substr(2, 6),
-        name: item.title,
-        title: item.title,
-        timestamp: finalTime,
-        createdAt: finalTime,
-        windowCount: item.windowCount,
-        tabCount: item.tabCount,
-        groupCount: item.groupCount,
-        data: item.data
+        id: col.id ? ('sb_' + col.id) : ('sb_' + createdAt + '_' + idx),
+        name: sessionTitle,
+        title: sessionTitle,
+        timestamp: createdAt,
+        createdAt: createdAt,
+        windowCount: windows.length || 1,
+        tabCount: totalTabs,
+        groupCount: totalGroups,
+        data: windows
       };
+    });
+
+    // 3. Сортируем: САМЫЕ СВЕЖИЕ СВЕРХУ (от новых к старым)
+    importedSessions.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+    // 4. Сохраняем в chrome.storage.local
+    chrome.storage.local.get(['saved_sessions'], async (res) => {
+      const existing = Array.isArray(res.saved_sessions) ? res.saved_sessions : [];
+
+      // Предотвращаем дубли по id
+      const existingIds = new Set(existing.map(s => s.id));
+      const newUnique = importedSessions.filter(s => !existingIds.has(s.id));
+
+      if (newUnique.length === 0) {
+        showToast('Все сессии из этого бэкапа уже присутствуют в списке.');
+        return;
+      }
+
+      const merged = [...newUnique, ...existing];
+      // Общая сортировка по дате
+      merged.sort((a, b) => (b.createdAt || b.timestamp || 0) - (a.createdAt || a.timestamp || 0));
+
+      await chrome.storage.local.set({ saved_sessions: merged });
+
+      await fetchSavedSessions();
+      renderSidebarSessions();
+      if (newUnique.length > 0) {
+        selectSession(newUnique[0]);
+      }
+
+      showToast(`✨ Успешно импортировано ${newUnique.length} сессий из бэкапа Session Buddy!`, 4000);
+      alert(`Успешно импортировано ${newUnique.length} сессий из Session Buddy!`);
     });
   }
 
@@ -1420,52 +1284,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       sessionBuddyFileInput.click();
     });
 
-    sessionBuddyFileInput.addEventListener('change', (e) => {
+    sessionBuddyFileInput.addEventListener('change', async (e) => {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
-
-      const reader = new FileReader();
-      reader.onload = async (event) => {
-        try {
-          const jsonContent = event.target.result;
-          const data = JSON.parse(jsonContent);
-          const sessionsToImport = parseSessionBuddyJSON(data);
-
-          if (!sessionsToImport || sessionsToImport.length === 0) {
-            showToast('В файле не найдено сессий Session Buddy (v3 или v4).');
-            return;
-          }
-
-          // Мерджим в наш chrome.storage.local с существующими сохраненными сессиями
-          const stored = await chrome.storage.local.get(['saved_sessions']);
-          const existing = Array.isArray(stored.saved_sessions) ? stored.saved_sessions : [];
-
-          // Проверяем на дубликаты по имени и таймстемпу
-          const existingKeys = new Set(existing.map(s => `${s.name}_${s.timestamp}`));
-          const uniqueToImport = sessionsToImport.filter(s => !existingKeys.has(`${s.name}_${s.timestamp}`));
-
-          if (uniqueToImport.length === 0) {
-            showToast('Все сессии из этого файла Session Buddy уже присутствуют в списке.');
-            return;
-          }
-
-          const merged = [...uniqueToImport, ...existing];
-          await chrome.storage.local.set({ saved_sessions: merged });
-
-          // Перерисовываем список сессий в интерфейсе
-          await fetchSavedSessions();
-          renderSidebarSessions();
-          selectSession(uniqueToImport[0]);
-
-          const totalTabs = uniqueToImport.reduce((sum, s) => sum + (s.tabCount || 0), 0);
-          showToast(`✨ Успешно импортировано ${uniqueToImport.length} сессий (${totalTabs} вкл.) из Session Buddy!`);
-        } catch (err) {
-          console.error('[SessionBuddy Import Error]', err);
-          showToast(`Ошибка парсинга Session Buddy: ${err.message}`);
-        }
-      };
-
-      reader.readAsText(file);
+      await importSessionBuddyBackup(file);
     });
   }
 
@@ -1485,26 +1307,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         const jsonContent = event.target.result;
         const data = JSON.parse(jsonContent);
 
-        // Smart check: If file is Session Buddy format, parse and import directly!
-        if (data && (data.collections || data.sessions || (data.folders && !data.data))) {
-          const sessionsToImport = parseSessionBuddyJSON(data);
-          if (sessionsToImport && sessionsToImport.length > 0) {
-            const stored = await chrome.storage.local.get(['saved_sessions']);
-            const existing = Array.isArray(stored.saved_sessions) ? stored.saved_sessions : [];
-            const existingKeys = new Set(existing.map(s => `${s.name}_${s.timestamp}`));
-            const uniqueToImport = sessionsToImport.filter(s => !existingKeys.has(`${s.name}_${s.timestamp}`));
-
-            if (uniqueToImport.length > 0) {
-              const merged = [...uniqueToImport, ...existing];
-              await chrome.storage.local.set({ saved_sessions: merged });
-              await fetchSavedSessions();
-              renderSidebarSessions();
-              selectSession(uniqueToImport[0]);
-              const totalTabs = uniqueToImport.reduce((sum, s) => sum + (s.tabCount || 0), 0);
-              showToast(`✨ Импортировано ${uniqueToImport.length} сессий (${totalTabs} вкл.) из Session Buddy!`);
-              return;
-            }
-          }
+        // Smart check: If file is Session Buddy backup format, import directly!
+        if (data && (data.collections || (data.data && data.data.collections) || data.sessions || (data.folders && !data.data))) {
+          await importSessionBuddyBackup(file);
+          return;
         }
 
         // Native session JSON import
@@ -1602,16 +1408,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   await fetchLiveSession();
   await fetchSavedSessions();
 
-  // Автоматическая очистка импортированных из Session Buddy сессий:
-  // Удаляет все сессии sb_*, оставляя только родные ('session_*')
-  const stored = await chrome.storage.local.get(['saved_sessions']);
-  const allSaved = Array.isArray(stored.saved_sessions) ? stored.saved_sessions : [];
-  const nativeOnly = allSaved.filter(s => s && s.id && !s.id.startsWith('sb_'));
-  const sbCount = allSaved.length - nativeOnly.length;
-  if (sbCount > 0) {
-    await chrome.storage.local.set({ saved_sessions: nativeOnly });
-    savedSessions = nativeOnly;
-    showToast(`🧹 Удалено ${sbCount} сессий Session Buddy. Ваша родная сессия сохранена!`, 4000);
+  // Однократная очистка старой ошибочной истории Session Buddy (выполняется ровно 1 раз до нового импорта)
+  if (!localStorage.getItem('chrome_bridge_old_sb_cleared_v2')) {
+    const stored = await chrome.storage.local.get(['saved_sessions']);
+    const allSaved = Array.isArray(stored.saved_sessions) ? stored.saved_sessions : [];
+    const nativeOnly = allSaved.filter(s => s && s.id && !s.id.startsWith('sb_'));
+    const sbCount = allSaved.length - nativeOnly.length;
+    if (sbCount > 0) {
+      await chrome.storage.local.set({ saved_sessions: nativeOnly });
+      savedSessions = nativeOnly;
+      showToast(`🧹 Удалено ${sbCount} старых сессий Session Buddy. Ваша родная сессия сохранена!`, 4000);
+    }
+    localStorage.setItem('chrome_bridge_old_sb_cleared_v2', 'true');
   }
 
   renderSidebarSessions();
