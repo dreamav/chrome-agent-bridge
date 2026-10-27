@@ -1109,7 +1109,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const posterUrl = `https://img.youtube.com/vi/${ytVideoId}/mqdefault.jpg`;
       mediaHtml = `
         <div class="hover-preview-media" title="Кликните, чтобы открыть видео в Chrome">
-          <img src="${posterUrl}" alt="Превью YouTube" onerror="this.parentElement.style.display='none';">
+          <img src="${escapeHtml(posterUrl)}" alt="Превью YouTube">
           <div class="hover-preview-yt-badge">
             <span>▶</span> YouTube Video
           </div>
@@ -1118,7 +1118,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       `;
     } else {
       const faviconImg = faviconUrl
-        ? `<img src="${faviconUrl}" alt="" onerror="this.parentElement.textContent='🌐';">`
+        ? `<img src="${escapeHtml(faviconUrl)}" alt="">`
         : '🌐';
       headerHtml = `
         <div class="hover-preview-header-generic">
@@ -1164,6 +1164,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       btnClose.addEventListener('click', (e) => {
         e.stopPropagation();
         hideTabHoverPreview(true);
+      });
+    }
+
+    // Image fallback error listeners (Pure JS, zero CSP violations)
+    const previewPosterImg = tabHoverPreview.querySelector('.hover-preview-media img');
+    if (previewPosterImg) {
+      previewPosterImg.addEventListener('error', () => {
+        const mediaParent = previewPosterImg.closest('.hover-preview-media');
+        if (mediaParent) mediaParent.style.display = 'none';
+      });
+    }
+
+    const previewFavImg = tabHoverPreview.querySelector('.hover-preview-favicon-box img');
+    if (previewFavImg) {
+      previewFavImg.addEventListener('error', () => {
+        const box = previewFavImg.parentElement;
+        if (box) box.textContent = '🌐';
       });
     }
 
@@ -1309,7 +1326,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const faviconUrl = tab.favIconUrl || (domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=32` : '');
 
     const faviconHtml = faviconUrl
-      ? `<img src="${faviconUrl}" alt="" onerror="this.src=''; this.parentElement.textContent='🌐'">`
+      ? `<img src="${escapeHtml(faviconUrl)}" alt="">`
       : '🌐';
 
     const pinnedBadge = tab.pinned ? '<span class="tab-badge pinned">📌 PIN</span>' : '';
@@ -1327,6 +1344,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         <button class="tab-hover-btn btn-copy-url" title="Скопировать ссылку">🔗</button>
       </div>
     `;
+
+    // Fallback on broken favicon image (Pure JS, zero CSP violations)
+    const favImg = item.querySelector('.tab-favicon img');
+    if (favImg) {
+      favImg.addEventListener('error', () => {
+        const parent = favImg.parentElement;
+        if (parent) parent.textContent = '🌐';
+      });
+    }
 
     item.addEventListener('mouseenter', (e) => {
       // If user is currently interacting with the open preview card, don't interrupt!
