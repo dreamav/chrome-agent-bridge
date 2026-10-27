@@ -471,10 +471,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ==========================================================================
   // TAB HOVER PREVIEW CONTROLLER (Glassmorphism & YouTube Posters)
   // ==========================================================================
+  // ==========================================================================
+  // TAB HOVER PREVIEW CONTROLLER (Glassmorphism & YouTube Posters)
+  // ==========================================================================
   const tabHoverPreview = document.getElementById('tabHoverPreview');
   let hoverShowTimer = null;
   let hoverHideTimer = null;
-  const HOVER_SHOW_DELAY = 240; // 240ms delay prevents flickering on fast cursor movement
+  let isMouseOverCard = false;
+  let activePreviewItem = null;
+  const HOVER_SHOW_DELAY = 220; // 220ms delay prevents flickering
+  const HOVER_HIDE_GRACE = 380; // 380ms grace period so cursor can smoothly transition into the card
 
   function extractYouTubeVideoId(url) {
     if (!url || typeof url !== 'string') return null;
@@ -509,8 +515,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     return match ? match[1] : null;
   }
 
-  function showTabHoverPreview(tab, context, mousePos) {
+  function showTabHoverPreview(tab, context, itemEl) {
     if (!tabHoverPreview || !tab || !tab.url) return;
+
+    activePreviewItem = itemEl;
+    if (hoverHideTimer) {
+      clearTimeout(hoverHideTimer);
+      hoverHideTimer = null;
+    }
 
     const domain = extractDomain(tab.url);
     const ytVideoId = extractYouTubeVideoId(tab.url);
@@ -521,21 +533,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (context && context.groupTitle) {
       const chipColor = CHROME_GROUP_COLORS[context.groupColor] || '#38bdf8';
       groupBadge = `
-        <span class="hover-preview-pill pill-group">
+        <span class="hover-preview-pill pill-group" title="Группа вкладок Chrome">
           <span style="width: 7px; height: 7px; border-radius: 50%; background: ${chipColor}; display: inline-block;"></span>
           ${escapeHtml(context.groupTitle)}
         </span>
       `;
     } else if (context && context.isUngrouped) {
-      groupBadge = `<span class="hover-preview-pill">Вне групп</span>`;
+      groupBadge = `<span class="hover-preview-pill" title="Вне групп">Вне групп</span>`;
     }
 
-    const pinnedBadge = tab.pinned ? `<span class="hover-preview-pill">📌 Закреплена</span>` : '';
-    const activeBadge = tab.active ? `<span class="hover-preview-pill pill-live">★ Активная</span>` : '';
-    const winBadge = context?.windowTitle ? `<span class="hover-preview-pill">${escapeHtml(context.windowTitle)}</span>` : '';
+    const pinnedBadge = tab.pinned ? `<span class="hover-preview-pill" title="Закреплённая вкладка">📌 Закреплена</span>` : '';
+    const activeBadge = tab.active ? `<span class="hover-preview-pill pill-live" title="Активная вкладка">★ Активная</span>` : '';
+    const winBadge = context?.windowTitle ? `<span class="hover-preview-pill" title="Окно Chrome">${escapeHtml(context.windowTitle)}</span>` : '';
     const sessionTypeBadge = activeSession?.isLive
-      ? `<span class="hover-preview-pill pill-live">🟢 Live</span>`
-      : `<span class="hover-preview-pill">💾 Сохранено</span>`;
+      ? `<span class="hover-preview-pill pill-live" title="Текущая живая сессия">🟢 Live</span>`
+      : `<span class="hover-preview-pill" title="Сохранённая сессия">💾 Сохранено</span>`;
 
     let mediaHtml = '';
     let headerHtml = '';
@@ -545,7 +557,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       openBtnText = '<span>▶</span> Смотреть видео';
       const posterUrl = `https://img.youtube.com/vi/${ytVideoId}/mqdefault.jpg`;
       mediaHtml = `
-        <div class="hover-preview-media">
+        <div class="hover-preview-media" title="Кликните, чтобы открыть видео в Chrome">
           <img src="${posterUrl}" alt="Превью YouTube" onerror="this.parentElement.style.display='none';">
           <div class="hover-preview-yt-badge">
             <span>▶</span> YouTube Video
@@ -571,6 +583,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     tabHoverPreview.innerHTML = `
+      <button class="btn-preview-close" type="button" title="Закрыть превью">✕</button>
       ${mediaHtml}
       ${headerHtml}
       <div class="hover-preview-body">
@@ -594,6 +607,26 @@ document.addEventListener('DOMContentLoaded', async () => {
       </div>
     `;
 
+    // Connect Close Button
+    const btnClose = tabHoverPreview.querySelector('.btn-preview-close');
+    if (btnClose) {
+      btnClose.addEventListener('click', (e) => {
+        e.stopPropagation();
+        hideTabHoverPreview(true);
+      });
+    }
+
+    // Connect Click on Media Poster
+    const mediaEl = tabHoverPreview.querySelector('.hover-preview-media');
+    if (mediaEl) {
+      mediaEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        chrome.tabs.create({ url: tab.url, active: true });
+        showToast(`Видео открыто → ${tab.title || domain}`);
+        hideTabHoverPreview(true);
+      });
+    }
+
     // Connect Action Buttons in Hover Card
     tabHoverPreview.querySelector('.btn-preview-open').addEventListener('click', (e) => {
       e.stopPropagation();
@@ -602,37 +635,52 @@ document.addEventListener('DOMContentLoaded', async () => {
       hideTabHoverPreview(true);
     });
 
-    tabHoverPreview.querySelector('.btn-preview-copy').addEventListener('click', (e) => {
+    const btnCopy = tabHoverPreview.querySelector('.btn-preview-copy');
+    btnCopy.addEventListener('click', (e) => {
       e.stopPropagation();
       navigator.clipboard.writeText(tab.url);
+      btnCopy.innerHTML = '<span>✓</span> Ссылка скопирована!';
+      btnCopy.style.borderColor = 'var(--cyan-neon)';
+      btnCopy.style.color = '#fff';
       showToast('URL скопирован в буфер обмена!');
+      setTimeout(() => {
+        if (btnCopy) {
+          btnCopy.innerHTML = '<span>🔗</span> Скопировать ссылку';
+          btnCopy.style.borderColor = '';
+          btnCopy.style.color = '';
+        }
+      }, 1500);
     });
 
-    // Smart Positioning (Clamped within screen boundaries)
+    // Positioning anchored directly to the tab item row
+    const itemRect = itemEl ? itemEl.getBoundingClientRect() : { left: 100, right: 300, top: 100, bottom: 140 };
     const cardWidth = 380;
     const cardPadding = 16;
-    const mouseX = mousePos?.x || (window.innerWidth / 2);
-    const mouseY = mousePos?.y || (window.innerHeight / 2);
 
-    let targetX = mouseX + 16;
+    // Horizontal: align slightly indented from tab start, clamped to window bounds
+    let targetX = itemRect.left + 80;
     if (targetX + cardWidth > window.innerWidth - cardPadding) {
-      targetX = mouseX - cardWidth - 16;
-      if (targetX < cardPadding) {
-        targetX = Math.max(cardPadding, window.innerWidth - cardWidth - cardPadding);
-      }
+      targetX = window.innerWidth - cardWidth - cardPadding;
+    }
+    if (targetX < cardPadding) {
+      targetX = cardPadding;
     }
 
-    // Place temporarily offscreen to measure real height
+    // Measure real height
     tabHoverPreview.style.left = `${Math.round(targetX)}px`;
     tabHoverPreview.style.top = '-9999px';
     tabHoverPreview.classList.remove('hidden');
-    tabHoverPreview.classList.remove('visible');
 
     const cardHeight = tabHoverPreview.offsetHeight || 260;
-    let targetY = mouseY + 14;
-    if (targetY + cardHeight > window.innerHeight - cardPadding) {
-      // Show above cursor
-      targetY = mouseY - cardHeight - 12;
+    let targetY;
+
+    // Check if fits below tab item
+    if (itemRect.bottom + cardHeight + cardPadding <= window.innerHeight) {
+      // Place right below tab item with tight 6px margin
+      targetY = itemRect.bottom + 6;
+    } else {
+      // Place right above tab item with tight 6px margin
+      targetY = itemRect.top - cardHeight - 6;
       if (targetY < cardPadding) {
         targetY = Math.max(cardPadding, window.innerHeight - cardHeight - cardPadding);
       }
@@ -659,36 +707,51 @@ document.addEventListener('DOMContentLoaded', async () => {
         clearTimeout(hoverHideTimer);
         hoverHideTimer = null;
       }
+      isMouseOverCard = false;
+      activePreviewItem = null;
       tabHoverPreview.classList.remove('visible');
       tabHoverPreview.classList.add('hidden');
       tabHoverPreview.setAttribute('aria-hidden', 'true');
     } else {
-      tabHoverPreview.classList.remove('visible');
+      // Grace period: DO NOT remove .visible immediately!
+      // This gives user 380ms to smoothly glide the mouse into the card.
       if (hoverHideTimer) clearTimeout(hoverHideTimer);
       hoverHideTimer = setTimeout(() => {
-        tabHoverPreview.classList.add('hidden');
-        tabHoverPreview.setAttribute('aria-hidden', 'true');
-      }, 200);
+        if (!isMouseOverCard) {
+          tabHoverPreview.classList.remove('visible');
+          tabHoverPreview.classList.add('hidden');
+          tabHoverPreview.setAttribute('aria-hidden', 'true');
+          activePreviewItem = null;
+        }
+      }, HOVER_HIDE_GRACE);
     }
   }
 
   // Preview card interactive behavior
   if (tabHoverPreview) {
     tabHoverPreview.addEventListener('mouseenter', () => {
+      isMouseOverCard = true;
       if (hoverHideTimer) {
         clearTimeout(hoverHideTimer);
         hoverHideTimer = null;
       }
     });
+
     tabHoverPreview.addEventListener('mouseleave', () => {
+      isMouseOverCard = false;
       hideTabHoverPreview(false);
     });
   }
 
-  // Auto-dismiss preview on scroll or window blur
+  // Auto-dismiss preview on scroll, window blur, or click outside
   sessionContent.addEventListener('scroll', () => hideTabHoverPreview(true), { passive: true });
   window.addEventListener('scroll', () => hideTabHoverPreview(true), { passive: true });
   window.addEventListener('blur', () => hideTabHoverPreview(true));
+  document.addEventListener('click', (e) => {
+    if (tabHoverPreview && !tabHoverPreview.contains(e.target) && !e.target.closest('.tab-item')) {
+      hideTabHoverPreview(true);
+    }
+  });
 
   // --- Create Tab Item DOM Element (Surgical Click-to-Open + Hover Preview) ---
   function createTabItemElement(tab, context = {}) {
@@ -718,23 +781,30 @@ document.addEventListener('DOMContentLoaded', async () => {
       </div>
     `;
 
-    // Track mouse position for accurate hover preview positioning
-    let mousePos = { x: 0, y: 0 };
-
     item.addEventListener('mouseenter', (e) => {
-      mousePos = { x: e.clientX, y: e.clientY };
+      // If user is currently interacting with the open preview card, don't interrupt!
+      if (isMouseOverCard) return;
+
+      if (item === activePreviewItem) {
+        // Re-entered the current item from nearby, keep card open!
+        if (hoverHideTimer) {
+          clearTimeout(hoverHideTimer);
+          hoverHideTimer = null;
+        }
+        return;
+      }
+
       if (hoverHideTimer) {
         clearTimeout(hoverHideTimer);
         hoverHideTimer = null;
       }
+
       if (hoverShowTimer) clearTimeout(hoverShowTimer);
       hoverShowTimer = setTimeout(() => {
-        showTabHoverPreview(tab, context, mousePos);
+        if (!isMouseOverCard) {
+          showTabHoverPreview(tab, context, item);
+        }
       }, HOVER_SHOW_DELAY);
-    });
-
-    item.addEventListener('mousemove', (e) => {
-      mousePos = { x: e.clientX, y: e.clientY };
     });
 
     item.addEventListener('mouseleave', () => {
@@ -742,6 +812,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         clearTimeout(hoverShowTimer);
         hoverShowTimer = null;
       }
+      // Start grace countdown so user can move into the card!
       hideTabHoverPreview(false);
     });
 
