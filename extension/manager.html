@@ -155,8 +155,13 @@
 
       <!-- Search Results Banner (Visible when searching) -->
       <div id="searchBanner" class="search-banner hidden">
-        <span>Найдено: <strong id="searchMatchCount">0</strong> вкладок по запросу «<span id="searchQueryText"></span>»</span>
-        <button id="btnResetFilter" class="btn-reset-filter">Сбросить фильтр</button>
+        <span id="searchBannerLabel">Найдено: <strong id="searchMatchCount">0</strong> вкладок по запросу «<span id="searchQueryText"></span>»</span>
+        <div class="search-banner-actions">
+          <button id="btnToggleShowAllInSession" class="btn-banner-action" type="button" title="Переключить: показать все вкладки этой сессии или только найденные">
+            <span id="toggleShowAllIcon">👁️</span> <span id="toggleShowAllText">Показать всё в этой сессии</span>
+          </button>
+          <button id="btnResetFilter" class="btn-reset-filter" type="button">Сбросить фильтр</button>
+        </div>
       </div>
 
       <!-- Windows and Groups Container -->

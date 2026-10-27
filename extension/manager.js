@@ -39,8 +39,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnRefreshLive = document.getElementById('btnRefreshLive');
 
   const searchBanner = document.getElementById('searchBanner');
+  const searchBannerLabel = document.getElementById('searchBannerLabel');
   const searchMatchCount = document.getElementById('searchMatchCount');
   const searchQueryText = document.getElementById('searchQueryText');
+  const btnToggleShowAllInSession = document.getElementById('btnToggleShowAllInSession');
+  const toggleShowAllIcon = document.getElementById('toggleShowAllIcon');
+  const toggleShowAllText = document.getElementById('toggleShowAllText');
   const btnResetFilter = document.getElementById('btnResetFilter');
 
   const sessionContent = document.getElementById('sessionContent');
@@ -64,6 +68,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let savedSessions = [];
   let activeSession = null; // Either liveSession or a saved session
   let searchQuery = '';
+  let showAllInCurrentSession = false; // Toggle to view all tabs of active session even during search
   const collapsedGroups = new Set(); // Group keys collapsed by user
   const collapsedWindows = new Set(); // Window keys collapsed by user
 
@@ -422,6 +427,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // --- Select Active Session ---
   function selectSession(session) {
     activeSession = session;
+    showAllInCurrentSession = false; // Reset to focused matches view on session switch
 
     // Update active highlight in sidebar
     if (session.isLive) {
@@ -505,6 +511,26 @@ document.addEventListener('DOMContentLoaded', async () => {
       (w.tabs || []).some(t => `${t.title || ''} ${t.url || ''}`.toLowerCase().includes(filter))
     );
 
+    // Calculate total matches in this session
+    if (filter) {
+      windows.forEach(win => {
+        (win.tabs || []).forEach(t => {
+          const text = `${t.title || ''} ${t.url || ''}`.toLowerCase();
+          if (text.includes(filter)) {
+            totalMatches++;
+          }
+        });
+        (win.groups || []).forEach(g => {
+          if ((g.title || '').toLowerCase().includes(filter)) {
+            totalMatches++;
+          }
+        });
+      });
+      if (totalMatches === 0 && sessionTitleMatches) {
+        totalMatches = 1;
+      }
+    }
+
     windows.forEach((win, winIndex) => {
       const winTabs = win.tabs || [];
       const winGroups = win.groups || [];
@@ -524,9 +550,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       });
 
-      // Filter tabs if search is active
+      // Filter tabs if search is active AND showAllInCurrentSession is false
       const matchesTab = (t) => {
-        if (!filter) return true;
+        if (!filter || showAllInCurrentSession) return true;
         if (hasAnyTabMatch) {
           const text = `${t.title || ''} ${t.url || ''}`.toLowerCase();
           return text.includes(filter);
@@ -541,8 +567,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       winGroups.forEach(g => {
         const tabsInGroup = groupedTabsMap.get(g.id) || [];
         const groupTitleMatch = (g.title || '').toLowerCase().includes(filter);
-        const filteredGroupTabs = tabsInGroup.filter(t => matchesTab(t) || groupTitleMatch);
-        if (filteredGroupTabs.length > 0 || (!filter && tabsInGroup.length > 0)) {
+        const filteredGroupTabs = tabsInGroup.filter(t => matchesTab(t) || (!showAllInCurrentSession && groupTitleMatch));
+        if (filteredGroupTabs.length > 0 || (!filter && tabsInGroup.length > 0) || (showAllInCurrentSession && tabsInGroup.length > 0)) {
           filteredGroups.push({
             groupDef: g,
             tabs: filteredGroupTabs
@@ -551,12 +577,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       });
 
-      // If search query is active and this window has 0 matching tabs, skip window
-      if (filter && winMatchingTabsCount === 0) {
+      // If search query is active, showAllInCurrentSession is false, and this window has 0 matching tabs, skip window
+      if (filter && !showAllInCurrentSession && winMatchingTabsCount === 0) {
         return;
       }
-
-      totalMatches += winMatchingTabsCount;
 
       // Create Window Card DOM
       const winKey = `${activeSession.id}_win_${winIndex}`;
@@ -678,13 +702,33 @@ document.addEventListener('DOMContentLoaded', async () => {
       sessionContent.appendChild(winCard);
     });
 
-    // Update search banner visibility
+    // Update search banner visibility and toggle button
     if (filter) {
       searchBanner.classList.remove('hidden');
-      searchMatchCount.textContent = totalMatches;
-      searchQueryText.textContent = filter;
 
-      if (totalMatches === 0) {
+      if (showAllInCurrentSession) {
+        if (searchBannerLabel) {
+          searchBannerLabel.innerHTML = `Показаны <strong>все ${activeSession.tabCount || 0} вкладок</strong> сессии (совпадений: <strong style="color: #38bdf8;">${totalMatches}</strong> по «${escapeHtml(filter)}»)`;
+        }
+        if (btnToggleShowAllInSession) {
+          btnToggleShowAllInSession.classList.add('active');
+          if (toggleShowAllIcon) toggleShowAllIcon.textContent = '🔍';
+          if (toggleShowAllText) toggleShowAllText.textContent = `Только совпадения (${totalMatches})`;
+          btnToggleShowAllInSession.title = `Вернуться к показу только найденных вкладок (${totalMatches} шт.)`;
+        }
+      } else {
+        if (searchBannerLabel) {
+          searchBannerLabel.innerHTML = `Найдено: <strong>${totalMatches}</strong> вкладок по запросу «<span id="searchQueryText">${escapeHtml(filter)}</span>»`;
+        }
+        if (btnToggleShowAllInSession) {
+          btnToggleShowAllInSession.classList.remove('active');
+          if (toggleShowAllIcon) toggleShowAllIcon.textContent = '👁️';
+          if (toggleShowAllText) toggleShowAllText.textContent = `Показать всё в этой сессии (${activeSession.tabCount || 0})`;
+          btnToggleShowAllInSession.title = `Показать все ${activeSession.tabCount || 0} вкладок этой сессии с подсветкой совпадений`;
+        }
+      }
+
+      if (totalMatches === 0 && !showAllInCurrentSession) {
         sessionContent.innerHTML = `
           <div style="text-align: center; color: var(--text-muted); font-size: 13px; padding: 50px 20px;">
             В сессии «<strong>${escapeHtml(activeSession?.name || activeSession?.title || 'сессия')}</strong>» не найдено вкладок по запросу «${escapeHtml(filter)}».
@@ -1286,6 +1330,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     btnClearSearch.classList.add('hidden');
     handleSearchUpdate();
   });
+
+  if (btnToggleShowAllInSession) {
+    btnToggleShowAllInSession.addEventListener('click', () => {
+      showAllInCurrentSession = !showAllInCurrentSession;
+      renderWindowsAndGroups();
+    });
+  }
 
   // --- Header Action Buttons ---
   btnRestoreAll.addEventListener('click', () => {
