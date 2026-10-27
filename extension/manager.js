@@ -424,7 +424,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         const groupItemsContainer = groupCard.querySelector('.tab-group-items');
         tabs.forEach(tab => {
-          groupItemsContainer.appendChild(createTabItemElement(tab));
+          groupItemsContainer.appendChild(createTabItemElement(tab, {
+            groupTitle: groupDef.title,
+            groupColor,
+            windowTitle: winTitle
+          }));
         });
 
         winBody.appendChild(groupCard);
@@ -438,7 +442,10 @@ document.addEventListener('DOMContentLoaded', async () => {
           <div class="ungrouped-title">Вне групп (${filteredUngrouped.length})</div>
         `;
         filteredUngrouped.forEach(tab => {
-          ungroupedCard.appendChild(createTabItemElement(tab));
+          ungroupedCard.appendChild(createTabItemElement(tab, {
+            isUngrouped: true,
+            windowTitle: winTitle
+          }));
         });
         winBody.appendChild(ungroupedCard);
       }
@@ -461,11 +468,232 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // --- Create Tab Item DOM Element (Killer Feature: Surgical Click-to-Open) ---
-  function createTabItemElement(tab) {
+  // ==========================================================================
+  // TAB HOVER PREVIEW CONTROLLER (Glassmorphism & YouTube Posters)
+  // ==========================================================================
+  const tabHoverPreview = document.getElementById('tabHoverPreview');
+  let hoverShowTimer = null;
+  let hoverHideTimer = null;
+  const HOVER_SHOW_DELAY = 240; // 240ms delay prevents flickering on fast cursor movement
+
+  function extractYouTubeVideoId(url) {
+    if (!url || typeof url !== 'string') return null;
+    try {
+      const u = new URL(url);
+      const host = u.hostname.replace(/^www\./, '').toLowerCase();
+
+      if (host === 'youtube.com' || host === 'm.youtube.com') {
+        if (u.pathname === '/watch') {
+          return u.searchParams.get('v');
+        }
+        if (u.pathname.startsWith('/shorts/')) {
+          const parts = u.pathname.split('/');
+          return parts[2] || null;
+        }
+        if (u.pathname.startsWith('/embed/')) {
+          const parts = u.pathname.split('/');
+          return parts[2] || null;
+        }
+        if (u.pathname.startsWith('/live/')) {
+          const parts = u.pathname.split('/');
+          return parts[2] || null;
+        }
+      } else if (host === 'youtu.be') {
+        const id = u.pathname.replace(/^\//, '').split(/[?#&]/)[0];
+        return id || null;
+      }
+    } catch (e) {
+      // Fallback regex
+    }
+    const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?.*v=|shorts\/|embed\/|live\/))([a-zA-Z0-9_-]{11})/);
+    return match ? match[1] : null;
+  }
+
+  function showTabHoverPreview(tab, context, mousePos) {
+    if (!tabHoverPreview || !tab || !tab.url) return;
+
+    const domain = extractDomain(tab.url);
+    const ytVideoId = extractYouTubeVideoId(tab.url);
+    const faviconUrl = tab.favIconUrl || (domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=64` : '');
+
+    // Context badges
+    let groupBadge = '';
+    if (context && context.groupTitle) {
+      const chipColor = CHROME_GROUP_COLORS[context.groupColor] || '#38bdf8';
+      groupBadge = `
+        <span class="hover-preview-pill pill-group">
+          <span style="width: 7px; height: 7px; border-radius: 50%; background: ${chipColor}; display: inline-block;"></span>
+          ${escapeHtml(context.groupTitle)}
+        </span>
+      `;
+    } else if (context && context.isUngrouped) {
+      groupBadge = `<span class="hover-preview-pill">Вне групп</span>`;
+    }
+
+    const pinnedBadge = tab.pinned ? `<span class="hover-preview-pill">📌 Закреплена</span>` : '';
+    const activeBadge = tab.active ? `<span class="hover-preview-pill pill-live">★ Активная</span>` : '';
+    const winBadge = context?.windowTitle ? `<span class="hover-preview-pill">${escapeHtml(context.windowTitle)}</span>` : '';
+    const sessionTypeBadge = activeSession?.isLive
+      ? `<span class="hover-preview-pill pill-live">🟢 Live</span>`
+      : `<span class="hover-preview-pill">💾 Сохранено</span>`;
+
+    let mediaHtml = '';
+    let headerHtml = '';
+    let openBtnText = '<span>🌐</span> Открыть вкладку';
+
+    if (ytVideoId) {
+      openBtnText = '<span>▶</span> Смотреть видео';
+      const posterUrl = `https://img.youtube.com/vi/${ytVideoId}/mqdefault.jpg`;
+      mediaHtml = `
+        <div class="hover-preview-media">
+          <img src="${posterUrl}" alt="Превью YouTube" onerror="this.parentElement.style.display='none';">
+          <div class="hover-preview-yt-badge">
+            <span>▶</span> YouTube Video
+          </div>
+          <div class="hover-preview-play-icon">▶</div>
+        </div>
+      `;
+    } else {
+      const faviconImg = faviconUrl
+        ? `<img src="${faviconUrl}" alt="" onerror="this.parentElement.textContent='🌐';">`
+        : '🌐';
+      headerHtml = `
+        <div class="hover-preview-header-generic">
+          <div class="hover-preview-favicon-box">
+            ${faviconImg}
+          </div>
+          <div class="hover-preview-domain-info">
+            <span class="hover-preview-domain">🔒 ${escapeHtml(domain || 'Веб-страница')}</span>
+            <span class="hover-preview-domain-sub">Полное превью ссылки</span>
+          </div>
+        </div>
+      `;
+    }
+
+    tabHoverPreview.innerHTML = `
+      ${mediaHtml}
+      ${headerHtml}
+      <div class="hover-preview-body">
+        <div class="hover-preview-title">${escapeHtml(tab.title || tab.url || 'Без названия')}</div>
+        <div class="hover-preview-url">${escapeHtml(tab.url)}</div>
+        <div class="hover-preview-meta-row">
+          ${sessionTypeBadge}
+          ${winBadge}
+          ${groupBadge}
+          ${pinnedBadge}
+          ${activeBadge}
+        </div>
+      </div>
+      <div class="hover-preview-footer">
+        <button class="btn-preview-open" type="button" title="Открыть в Chrome">
+          ${openBtnText}
+        </button>
+        <button class="btn-preview-copy" type="button" title="Скопировать ссылку в буфер">
+          <span>🔗</span> Скопировать ссылку
+        </button>
+      </div>
+    `;
+
+    // Connect Action Buttons in Hover Card
+    tabHoverPreview.querySelector('.btn-preview-open').addEventListener('click', (e) => {
+      e.stopPropagation();
+      chrome.tabs.create({ url: tab.url, active: true });
+      showToast(`Вкладка открыта → ${tab.title || domain}`);
+      hideTabHoverPreview(true);
+    });
+
+    tabHoverPreview.querySelector('.btn-preview-copy').addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(tab.url);
+      showToast('URL скопирован в буфер обмена!');
+    });
+
+    // Smart Positioning (Clamped within screen boundaries)
+    const cardWidth = 380;
+    const cardPadding = 16;
+    const mouseX = mousePos?.x || (window.innerWidth / 2);
+    const mouseY = mousePos?.y || (window.innerHeight / 2);
+
+    let targetX = mouseX + 16;
+    if (targetX + cardWidth > window.innerWidth - cardPadding) {
+      targetX = mouseX - cardWidth - 16;
+      if (targetX < cardPadding) {
+        targetX = Math.max(cardPadding, window.innerWidth - cardWidth - cardPadding);
+      }
+    }
+
+    // Place temporarily offscreen to measure real height
+    tabHoverPreview.style.left = `${Math.round(targetX)}px`;
+    tabHoverPreview.style.top = '-9999px';
+    tabHoverPreview.classList.remove('hidden');
+    tabHoverPreview.classList.remove('visible');
+
+    const cardHeight = tabHoverPreview.offsetHeight || 260;
+    let targetY = mouseY + 14;
+    if (targetY + cardHeight > window.innerHeight - cardPadding) {
+      // Show above cursor
+      targetY = mouseY - cardHeight - 12;
+      if (targetY < cardPadding) {
+        targetY = Math.max(cardPadding, window.innerHeight - cardHeight - cardPadding);
+      }
+    }
+
+    tabHoverPreview.style.left = `${Math.round(targetX)}px`;
+    tabHoverPreview.style.top = `${Math.round(targetY)}px`;
+    tabHoverPreview.setAttribute('aria-hidden', 'false');
+
+    requestAnimationFrame(() => {
+      tabHoverPreview.classList.add('visible');
+    });
+  }
+
+  function hideTabHoverPreview(immediate = false) {
+    if (hoverShowTimer) {
+      clearTimeout(hoverShowTimer);
+      hoverShowTimer = null;
+    }
+    if (!tabHoverPreview) return;
+
+    if (immediate) {
+      if (hoverHideTimer) {
+        clearTimeout(hoverHideTimer);
+        hoverHideTimer = null;
+      }
+      tabHoverPreview.classList.remove('visible');
+      tabHoverPreview.classList.add('hidden');
+      tabHoverPreview.setAttribute('aria-hidden', 'true');
+    } else {
+      tabHoverPreview.classList.remove('visible');
+      if (hoverHideTimer) clearTimeout(hoverHideTimer);
+      hoverHideTimer = setTimeout(() => {
+        tabHoverPreview.classList.add('hidden');
+        tabHoverPreview.setAttribute('aria-hidden', 'true');
+      }, 200);
+    }
+  }
+
+  // Preview card interactive behavior
+  if (tabHoverPreview) {
+    tabHoverPreview.addEventListener('mouseenter', () => {
+      if (hoverHideTimer) {
+        clearTimeout(hoverHideTimer);
+        hoverHideTimer = null;
+      }
+    });
+    tabHoverPreview.addEventListener('mouseleave', () => {
+      hideTabHoverPreview(false);
+    });
+  }
+
+  // Auto-dismiss preview on scroll or window blur
+  sessionContent.addEventListener('scroll', () => hideTabHoverPreview(true), { passive: true });
+  window.addEventListener('scroll', () => hideTabHoverPreview(true), { passive: true });
+  window.addEventListener('blur', () => hideTabHoverPreview(true));
+
+  // --- Create Tab Item DOM Element (Surgical Click-to-Open + Hover Preview) ---
+  function createTabItemElement(tab, context = {}) {
     const item = document.createElement('div');
     item.className = 'tab-item';
-    item.title = `Кликните, чтобы открыть в браузере:\n${tab.url}`;
 
     const domain = extractDomain(tab.url);
     const faviconUrl = tab.favIconUrl || (domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=32` : '');
@@ -490,10 +718,38 @@ document.addEventListener('DOMContentLoaded', async () => {
       </div>
     `;
 
+    // Track mouse position for accurate hover preview positioning
+    let mousePos = { x: 0, y: 0 };
+
+    item.addEventListener('mouseenter', (e) => {
+      mousePos = { x: e.clientX, y: e.clientY };
+      if (hoverHideTimer) {
+        clearTimeout(hoverHideTimer);
+        hoverHideTimer = null;
+      }
+      if (hoverShowTimer) clearTimeout(hoverShowTimer);
+      hoverShowTimer = setTimeout(() => {
+        showTabHoverPreview(tab, context, mousePos);
+      }, HOVER_SHOW_DELAY);
+    });
+
+    item.addEventListener('mousemove', (e) => {
+      mousePos = { x: e.clientX, y: e.clientY };
+    });
+
+    item.addEventListener('mouseleave', () => {
+      if (hoverShowTimer) {
+        clearTimeout(hoverShowTimer);
+        hoverShowTimer = null;
+      }
+      hideTabHoverPreview(false);
+    });
+
     // Click handler: Point opening (opens ONLY this tab directly in Chrome!)
     item.addEventListener('click', (e) => {
       if (e.target.closest('.btn-copy-url')) return;
       if (!tab.url) return;
+      hideTabHoverPreview(true);
       chrome.tabs.create({ url: tab.url, active: true });
       showToast(`Вкладка открыта → ${tab.title || domain}`);
     });
@@ -503,6 +759,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (btnCopy) {
       btnCopy.addEventListener('click', (e) => {
         e.stopPropagation();
+        hideTabHoverPreview(true);
         if (tab.url) {
           navigator.clipboard.writeText(tab.url);
           showToast('URL скопирован в буфер обмена!');
