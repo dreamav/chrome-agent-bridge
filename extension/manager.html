@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chrome Agent Bridge — Менеджер сессий & Tab Groups</title>
+  <link rel="stylesheet" href="manager.css">
+  <link rel="icon" type="image/png" href="icons/icon48.png">
+</head>
+<body>
+  <!-- Ambient background glow effects -->
+  <div class="ambient-glow glow-top-left"></div>
+  <div class="ambient-glow glow-bottom-right"></div>
+
+  <div class="app-layout">
+    <!-- LEFT SIDEBAR -->
+    <aside class="sidebar">
+      <!-- Brand & Status -->
+      <div class="sidebar-header">
+        <div class="brand">
+          <img src="icons/icon48.png" alt="Logo" class="brand-logo">
+          <div class="brand-text">
+            <h2>Chrome Bridge</h2>
+            <span class="brand-badge">Session Manager v1.3</span>
+          </div>
+        </div>
+        <div id="wsStatusBadge" class="status-badge">
+          <span class="status-dot"></span>
+          <span id="wsStatusText">Offline</span>
+        </div>
+      </div>
+
+      <!-- Search Input -->
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input
+          type="text"
+          id="searchInput"
+          placeholder="Быстрый поиск по заголовку или URL..."
+          autocomplete="off"
+          spellcheck="false"
+        >
+        <button id="btnClearSearch" class="btn-clear-search hidden" title="Очистить поиск">✕</button>
+      </div>
+
+      <!-- Quick Action Buttons -->
+      <div class="sidebar-actions">
+        <button id="btnSaveCurrent" class="btn btn-primary btn-glow" type="button">
+          <span>💾</span> Сохранить текущее состояние
+        </button>
+        <button id="btnImportJson" class="btn btn-secondary" type="button">
+          <span>📥</span> Импорт JSON
+        </button>
+        <input type="file" id="importFileInput" accept=".json" style="display: none;">
+      </div>
+
+      <!-- Sessions List -->
+      <div class="sessions-nav-container">
+        <!-- Live Current Session Section -->
+        <div class="nav-section-title">Текущее состояние Chrome</div>
+        <div id="liveSessionCard" class="session-nav-item active-live">
+          <div class="session-nav-icon">🟢</div>
+          <div class="session-nav-info">
+            <div class="session-nav-title">Живые вкладки прямо сейчас</div>
+            <div class="session-nav-meta">
+              <span id="liveWindowCountBadge" class="meta-pill">0 ок.</span>
+              <span id="liveTabCountBadge" class="meta-pill">0 вкл.</span>
+              <span id="liveGroupCountBadge" class="meta-pill">0 гр.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Saved Sessions Section -->
+        <div class="nav-section-header">
+          <span class="nav-section-title">Сохранённые сессии</span>
+          <span id="savedCountBadge" class="count-pill">0</span>
+        </div>
+
+        <div id="savedSessionsList" class="saved-sessions-list">
+          <!-- Rendered dynamically -->
+          <div class="sessions-loading">Загрузка сессий...</div>
+        </div>
+      </div>
+
+      <!-- Sidebar Footer -->
+      <div class="sidebar-footer">
+        <span class="endpoint-label">ws://127.0.0.1:8765</span>
+        <span class="footer-desc">0% CPU • KISS</span>
+      </div>
+    </aside>
+
+    <!-- RIGHT MAIN CONTENT (Details Viewer) -->
+    <main class="main-content">
+      <!-- Session Details Header Bar -->
+      <header class="details-header">
+        <div class="details-left-cluster">
+          <button id="btnToggleSidebar" class="btn btn-icon btn-toggle-sidebar" type="button" title="Скрыть/показать сайдбар (Ctrl+B)">
+            <span>☰</span>
+          </button>
+          <div class="details-title-group">
+            <div class="title-with-badge">
+              <h1 id="selectedSessionTitle">Живые вкладки прямо сейчас</h1>
+              <span id="selectedSessionTag" class="session-tag live">LIVE</span>
+            </div>
+            <div id="selectedSessionMeta" class="details-meta-row">
+              <span id="metaDate">Обновляется в реальном времени</span>
+              <span class="meta-separator">•</span>
+              <span id="metaStats">0 окон, 0 вкладок, 0 групп</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Action Bar -->
+        <div class="details-actions">
+          <div class="view-toggles">
+            <button id="btnExpandAll" class="btn btn-secondary btn-mini-action" type="button" title="Развернуть все окна и группы">
+              ▾ Развернуть
+            </button>
+            <button id="btnCollapseAll" class="btn btn-secondary btn-mini-action" type="button" title="Свернуть все окна и группы">
+              ▴ Свернуть
+            </button>
+          </div>
+          <button id="btnRestoreAll" class="btn btn-primary btn-large btn-glow" type="button">
+            <span>⚡</span> Восстановить всё
+          </button>
+          <button id="btnExportCurrent" class="btn btn-secondary" type="button" title="Экспортировать структуру в JSON">
+            <span>📥</span> Экспорт JSON
+          </button>
+          <button id="btnSaveLiveAsNew" class="btn btn-accent" type="button" title="Сохранить текущий слепок в историю">
+            <span>💾</span> Сохранить в сессии
+          </button>
+          <button id="btnDeleteCurrent" class="btn btn-danger hidden" type="button" title="Удалить эту сессию">
+            <span>🗑️</span>
+          </button>
+          <button id="btnRefreshLive" class="btn btn-icon" type="button" title="Обновить живой список">
+            <span>🔄</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Search Results Banner (Visible when searching) -->
+      <div id="searchBanner" class="search-banner hidden">
+        <span>Найдено: <strong id="searchMatchCount">0</strong> вкладок по запросу «<span id="searchQueryText"></span>»</span>
+        <button id="btnResetFilter" class="btn-reset-filter">Сбросить фильтр</button>
+      </div>
+
+      <!-- Windows and Groups Container -->
+      <div id="sessionContent" class="session-content">
+        <!-- Rendered dynamically: Window cards with colored Chrome Tab Groups and tabs -->
+      </div>
+    </main>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast"></div>
+
+  <script src="manager.js"></script>
+</body>
+</html>

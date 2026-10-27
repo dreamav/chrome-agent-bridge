@@ -29,6 +29,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnImportSession = document.getElementById('btnImportSession');
   const fileImportInput = document.getElementById('fileImportInput');
   const sessionsList = document.getElementById('sessionsList');
+  const btnOpenManager = document.getElementById('btnOpenManager');
+
+  if (btnOpenManager) {
+    btnOpenManager.addEventListener('click', () => {
+      chrome.tabs.create({ url: chrome.runtime.getURL('manager.html') });
+    });
+  }
 
   // Native Chrome Tab Groups color map
   const CHROME_GROUP_COLORS = {

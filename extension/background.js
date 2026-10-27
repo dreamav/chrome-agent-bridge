@@ -329,8 +329,8 @@ function sanitizeUrl(url) {
   return trimmed;
 }
 
-// 1. Save Session
-async function saveSession(name) {
+// 1. Build Live Session Data Helper
+async function getLiveSession() {
   const windows = await chrome.windows.getAll({ populate: true });
   let allGroups = [];
   try {
@@ -360,10 +360,13 @@ async function saveSession(name) {
   for (const win of windows) {
     const rawTabs = win.tabs || [];
     const tabs = rawTabs.map(t => ({
+      id: t.id,
       url: t.url || t.pendingUrl || '',
       title: t.title || '',
+      favIconUrl: t.favIconUrl || '',
       pinned: Boolean(t.pinned),
       index: t.index,
+      active: Boolean(t.active),
       groupId: (t.groupId !== undefined && t.groupId > 0) ? t.groupId : null
     }));
     totalTabs += tabs.length;
@@ -379,14 +382,30 @@ async function saveSession(name) {
     });
   }
 
-  const sessionObj = {
-    id: 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
-    name: (name && typeof name === 'string' && name.trim()) ? name.trim() : formatDefaultSessionName(),
+  return {
+    id: 'live_session',
+    name: 'Текущие открытые вкладки',
     timestamp: Date.now(),
+    isLive: true,
     windowCount: windowData.length,
     tabCount: totalTabs,
     groupCount: totalGroups,
     data: windowData
+  };
+}
+
+// 2. Save Session
+async function saveSession(name) {
+  const live = await getLiveSession();
+
+  const sessionObj = {
+    id: 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+    name: (name && typeof name === 'string' && name.trim()) ? name.trim() : formatDefaultSessionName(),
+    timestamp: Date.now(),
+    windowCount: live.windowCount,
+    tabCount: live.tabCount,
+    groupCount: live.groupCount,
+    data: live.data
   };
 
   const stored = await chrome.storage.local.get(['saved_sessions']);
@@ -397,13 +416,13 @@ async function saveSession(name) {
   return sessionObj;
 }
 
-// 2. List Sessions
+// 3. List Sessions
 async function listSessions() {
   const stored = await chrome.storage.local.get(['saved_sessions']);
   return Array.isArray(stored.saved_sessions) ? stored.saved_sessions : [];
 }
 
-// 3. Delete Session
+// 4. Delete Session
 async function deleteSession(sessionId) {
   const stored = await chrome.storage.local.get(['saved_sessions']);
   const list = Array.isArray(stored.saved_sessions) ? stored.saved_sessions : [];
@@ -412,8 +431,8 @@ async function deleteSession(sessionId) {
   return { success: true, deleted_id: sessionId, remaining_count: filtered.length };
 }
 
-// 4. Restore Session or Single Group
-async function restoreSession(sessionId, targetGroupId = null) {
+// 5. Restore Session, Single Window, or Single Group
+async function restoreSession(sessionId, targetGroupId = null, options = {}) {
   const stored = await chrome.storage.local.get(['saved_sessions']);
   const list = Array.isArray(stored.saved_sessions) ? stored.saved_sessions : [];
   const session = list.find(s => s.id === sessionId);
@@ -499,12 +518,17 @@ async function restoreSession(sessionId, targetGroupId = null) {
     };
   }
 
-  // Restore entire session (all windows & groups)
+  // Check if restoring a specific single window
+  const winIndex = options && (options.targetWindowIndex !== undefined ? options.targetWindowIndex : options.windowIndex);
+  const windowsToProcess = (winIndex !== undefined && winIndex !== null && session.data && session.data[winIndex])
+    ? [session.data[winIndex]]
+    : (session.data || []);
+
   let totalWindowsRestored = 0;
   let totalTabsRestored = 0;
   let totalGroupsRestored = 0;
 
-  for (const winData of session.data || []) {
+  for (const winData of windowsToProcess) {
     const tabs = winData.tabs || [];
     if (tabs.length === 0) continue;
 
@@ -587,7 +611,7 @@ async function restoreSession(sessionId, targetGroupId = null) {
 
   return {
     success: true,
-    mode: 'full_session',
+    mode: (winIndex !== undefined && winIndex !== null) ? 'single_window' : 'full_session',
     session_id: session.id,
     session_name: session.name,
     windows_restored: totalWindowsRestored,
@@ -596,7 +620,23 @@ async function restoreSession(sessionId, targetGroupId = null) {
   };
 }
 
-// 5. Export Session JSON
+// 6. Open Full-screen Manager Tab
+function openManagerTab() {
+  const managerUrl = chrome.runtime.getURL('manager.html');
+  chrome.tabs.query({}, (tabs) => {
+    const existing = (tabs || []).find(t => t.url && t.url.includes('manager.html'));
+    if (existing) {
+      chrome.tabs.update(existing.id, { active: true });
+      if (existing.windowId) {
+        chrome.windows.update(existing.windowId, { focused: true });
+      }
+    } else {
+      chrome.tabs.create({ url: managerUrl });
+    }
+  });
+}
+
+// 7. Export Session JSON
 async function exportSessionJson(sessionId) {
   const stored = await chrome.storage.local.get(['saved_sessions']);
   const list = Array.isArray(stored.saved_sessions) ? stored.saved_sessions : [];
@@ -812,6 +852,15 @@ async function executeAgentCommand(action, params) {
     }
 
     // Session Management Commands
+    case 'get_live_session': {
+      return await getLiveSession();
+    }
+
+    case 'open_manager': {
+      openManagerTab();
+      return { success: true };
+    }
+
     case 'save_session': {
       return await saveSession(params.name);
     }
@@ -823,7 +872,10 @@ async function executeAgentCommand(action, params) {
     case 'restore_session': {
       const sId = params.sessionId || params.session_id || params.id;
       const gId = params.targetGroupId !== undefined ? params.targetGroupId : params.target_group_id;
-      return await restoreSession(sId, gId);
+      const options = {
+        targetWindowIndex: params.targetWindowIndex !== undefined ? params.targetWindowIndex : params.windowIndex
+      };
+      return await restoreSession(sId, gId, options);
     }
 
     case 'export_session_json': {
@@ -846,7 +898,7 @@ async function executeAgentCommand(action, params) {
   }
 }
 
-// Listen for messages from popup UI
+// Listen for messages from popup UI and manager dashboard
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'get_status') {
     chrome.tabs.query({}).then(tabs => {
@@ -861,6 +913,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const supportedActions = [
     'get_tabs', 'close_duplicate_tabs', 'close_tabs', 'ungroup_all_tabs',
     'apply_layout', 'activate_tab', 'create_tab',
+    'get_live_session', 'open_manager',
     'save_session', 'list_sessions', 'restore_session', 'export_session_json', 'delete_session', 'import_session_json'
   ];
 
@@ -872,9 +925,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// Setup context menu for right-clicking extension icon
+chrome.runtime.onInstalled.addListener(() => {
+  connectBridge();
+  try {
+    chrome.contextMenus.create({
+      id: 'open_manager_tab',
+      title: '🖥️ Открыть менеджер во весь экран',
+      contexts: ['action']
+    });
+  } catch (e) {}
+});
+
+chrome.contextMenus.onClicked.addListener((info) => {
+  if (info.menuItemId === 'open_manager_tab') {
+    openManagerTab();
+  }
+});
+
 // Wake up & connect on browser events
 chrome.runtime.onStartup.addListener(connectBridge);
-chrome.runtime.onInstalled.addListener(connectBridge);
 chrome.tabs.onCreated.addListener(() => updateStatus(isConnected));
 chrome.tabs.onRemoved.addListener(() => updateStatus(isConnected));
 
