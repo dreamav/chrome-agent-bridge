@@ -198,7 +198,11 @@ function showHelp() {
     echo "====================================================================\n";
     echo "  Chrome Agent Bridge → CLI Console (PHP 7.1+)\n";
     echo "====================================================================\n\n";
-    echo "Доступные команды:\n";
+    echo "  php console.php sessions           → Список сохраненных сессий Chrome\n";
+    echo "  php console.php session-save [name]→ Сохранить текущую сессию с группами\n";
+    echo "  php console.php session-restore <id> [grp] → Восстановить сессию или группу\n";
+    echo "  php console.php session-export <id> [file] → Экспортировать сессию в JSON\n";
+    echo "  php console.php session-delete <id>→ Удалить сохраненную сессию\n";
     echo "  php console.php tabs               → Список всех открытых вкладок\n";
     echo "  php console.php dedupe             → Автоматическое закрытие дубликатов\n";
     echo "  php console.php read <tab_id>      → Получить текстовый контент страницы\n";
@@ -600,6 +604,120 @@ switch ($command) {
             echo "   • [{$g['color']}] {$g['domain']} → {$g['count']} вкл.\n";
         }
         echo "\n";
+        break;
+    }
+
+    case 'sessions':
+    case 'session-list': {
+        echo "\nChrome Agent Bridge → Список сохраненных сессий Chrome...\n";
+        $res = $client->request('list_sessions');
+        if (!($res['success'] ?? false)) {
+            echo "❌ Ошибка: " . ($res['error'] ?? 'Неизвестная ошибка') . "\n";
+            exit(1);
+        }
+        $sessions = $res['result'] ?? [];
+        if (empty($sessions)) {
+            echo "📂 Сохраненных сессий нет.\n\n";
+            break;
+        }
+        echo str_repeat('-', 95) . "\n";
+        echo mbPad("ID", 26) . mbPad("ДАТА", 18) . mbPad("ОКОН", 8) . mbPad("ВКЛАДОК", 10) . mbPad("ГРУПП", 8) . "НАЗВАНИЕ\n";
+        echo str_repeat('-', 95) . "\n";
+        foreach ($sessions as $s) {
+            $date = isset($s['timestamp']) ? date('Y-m-d H:i', (int)($s['timestamp'] / 1000)) : '-';
+            echo mbPad($s['id'] ?? '-', 26) .
+                 mbPad($date, 18) .
+                 mbPad((string)($s['windowCount'] ?? 1), 8) .
+                 mbPad((string)($s['tabCount'] ?? 0), 10) .
+                 mbPad((string)($s['groupCount'] ?? 0), 8) .
+                 ($s['name'] ?? 'Без названия') . "\n";
+        }
+        echo str_repeat('-', 95) . "\n";
+        echo "Всего сохраненных сессий: " . count($sessions) . "\n\n";
+        break;
+    }
+
+    case 'session-save':
+    case 'save-session': {
+        $name = isset($args[1]) ? implode(' ', array_slice($args, 1)) : '';
+        echo "\nChrome Agent Bridge → Сохранение текущей сессии с нативными группами вкладок...\n";
+        $res = $client->request('save_session', $name ? ['name' => $name] : []);
+        if (!($res['success'] ?? false)) {
+            echo "❌ Ошибка сохранения: " . ($res['error'] ?? 'Неизвестная ошибка') . "\n";
+            exit(1);
+        }
+        $s = $res['result'] ?? [];
+        echo "💾 Сессия успешно сохранена!\n";
+        echo "   • ID: {$s['id']}\n";
+        echo "   • Название: {$s['name']}\n";
+        echo "   • Окон: {$s['windowCount']}, Вкладок: {$s['tabCount']}, Групп: {$s['groupCount']}\n\n";
+        break;
+    }
+
+    case 'session-restore':
+    case 'restore-session': {
+        if (!isset($args[1])) {
+            echo "❌ Укажите ID сессии: php console.php session-restore <session_id> [target_group_id]\n";
+            exit(1);
+        }
+        $sId = $args[1];
+        $gId = isset($args[2]) ? $args[2] : null;
+        echo "\nChrome Agent Bridge → Восстановление сессии {$sId}...\n";
+        $params = ['sessionId' => $sId];
+        if ($gId !== null) $params['targetGroupId'] = $gId;
+        $res = $client->request('restore_session', $params);
+        if (!($res['success'] ?? false)) {
+            echo "❌ Ошибка восстановления: " . ($res['error'] ?? 'Неизвестная ошибка') . "\n";
+            exit(1);
+        }
+        $r = $res['result'] ?? [];
+        if (($r['mode'] ?? '') === 'single_group') {
+            echo "✨ Восстановлена группа '{$r['group_title']}' → {$r['tabs_restored']} вкл. в текущее окно!\n\n";
+        } else {
+            echo "✨ Сессия успешно восстановлена!\n";
+            echo "   • Окон восстановлено: " . ($r['windows_restored'] ?? 1) . "\n";
+            echo "   • Вкладок восстановлено: " . ($r['tabs_restored'] ?? 0) . "\n";
+            echo "   • Групп восстановлено: " . ($r['groups_restored'] ?? 0) . "\n\n";
+        }
+        break;
+    }
+
+    case 'session-export':
+    case 'export-session': {
+        if (!isset($args[1])) {
+            echo "❌ Укажите ID сессии: php console.php session-export <session_id> [output.json]\n";
+            exit(1);
+        }
+        $sId = $args[1];
+        $outFile = isset($args[2]) ? $args[2] : null;
+        $res = $client->request('export_session_json', ['sessionId' => $sId]);
+        if (!($res['success'] ?? false)) {
+            echo "❌ Ошибка экспорта: " . ($res['error'] ?? 'Неизвестная ошибка') . "\n";
+            exit(1);
+        }
+        $json = $res['result']['json'] ?? json_encode($res['result'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        if ($outFile) {
+            file_put_contents($outFile, $json);
+            echo "📥 Сессия {$sId} успешно экспортирована в файл {$outFile}!\n\n";
+        } else {
+            echo $json . "\n";
+        }
+        break;
+    }
+
+    case 'session-delete':
+    case 'delete-session': {
+        if (!isset($args[1])) {
+            echo "❌ Укажите ID сессии: php console.php session-delete <session_id>\n";
+            exit(1);
+        }
+        $sId = $args[1];
+        $res = $client->request('delete_session', ['sessionId' => $sId]);
+        if (!($res['success'] ?? false)) {
+            echo "❌ Ошибка удаления: " . ($res['error'] ?? 'Неизвестная ошибка') . "\n";
+            exit(1);
+        }
+        echo "🗑️ Сессия {$sId} удалена.\n\n";
         break;
     }
 

@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Chrome Agent Bridge",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Ультра-легковесный локальный мост между Google Chrome и AI-агентами (0% CPU)",
   "permissions": [
     "tabs",
     "tabGroups",
     "scripting",
-    "storage"
+    "storage",
+    "downloads"
   ],
   "host_permissions": [
     "<all_urls>"

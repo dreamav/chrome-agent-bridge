@@ -235,6 +235,60 @@ async def apply_layout(groups: list[dict], close_empty_windows: bool = True) -> 
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
+@mcp.tool()
+async def save_session(name: Optional[str] = None) -> str:
+    """
+    Save the current Google Chrome session (all windows, tabs, and native colored tab groups).
+    Args:
+        name: Optional custom name for the saved session (defaults to current date/time).
+    Returns:
+        JSON summary with session ID, windowCount, tabCount, and groupCount.
+    """
+    result = await send_command_to_chrome("save_session", {"name": name} if name else {})
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def list_sessions() -> str:
+    """
+    List all previously saved Chrome sessions with tab counts, group counts, and timestamps.
+    Returns:
+        JSON array of saved sessions.
+    """
+    result = await send_command_to_chrome("list_sessions")
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def restore_session(session_id: str, target_group_id: Optional[Union[int, str]] = None) -> str:
+    """
+    Restore a previously saved session or restore a single tab group from a saved session.
+    Args:
+        session_id: The ID of the saved session to restore.
+        target_group_id: Optional group ID or title to restore only that specific tab group into current window.
+    Returns:
+        JSON summary of restored windows, tabs, and tab groups.
+    """
+    params = {"sessionId": session_id}
+    if target_group_id is not None:
+        params["targetGroupId"] = target_group_id
+    result = await send_command_to_chrome("restore_session", params)
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def export_session_json(session_id: str) -> str:
+    """
+    Export the complete JSON structure of a saved session (windows, tabs, tab groups).
+    Args:
+        session_id: The ID of the session to export.
+    Returns:
+        Formatted JSON string of the complete session structure.
+    """
+    result = await send_command_to_chrome("export_session_json", {"sessionId": session_id})
+    return result.get("json", json.dumps(result, ensure_ascii=False, indent=2))
+
+
 
 # --- WebSocket Handler ---
 
