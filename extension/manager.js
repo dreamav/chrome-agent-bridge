@@ -2036,10 +2036,29 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   renderSidebarSessions();
 
-  // Select first saved session if exists, otherwise live session
-  if (savedSessions.length > 0) {
-    selectSession(savedSessions[0]);
-  } else if (liveSession) {
+  // Always activate "Живые вкладки прямо сейчас" (Live Session) by default!
+  if (liveSession) {
     selectSession(liveSession);
+  } else if (savedSessions.length > 0) {
+    selectSession(savedSessions[0]);
   }
+
+  // Auto-refresh live session whenever manager tab regains focus or visibility
+  window.addEventListener('focus', async () => {
+    await fetchLiveSession();
+    renderSidebarSessions();
+    if (activeSession && activeSession.isLive && liveSession) {
+      selectSession(liveSession);
+    }
+  });
+
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible') {
+      await fetchLiveSession();
+      renderSidebarSessions();
+      if (activeSession && activeSession.isLive && liveSession) {
+        selectSession(liveSession);
+      }
+    }
+  });
 });

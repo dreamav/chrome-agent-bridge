@@ -33,7 +33,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   if (btnOpenManager) {
     btnOpenManager.addEventListener('click', () => {
-      chrome.tabs.create({ url: chrome.runtime.getURL('manager.html') });
+      chrome.runtime.sendMessage({ action: 'open_manager' });
     });
   }
 
