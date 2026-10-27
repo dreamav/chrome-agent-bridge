@@ -717,6 +717,155 @@ async function importSessionJson(rawInput) {
   };
 }
 
+// 7. Add Video to YouTube "Watch Later" (InnerTube API)
+async function addVideoToYouTubeWatchLater(videoId) {
+  if (!videoId || typeof videoId !== 'string') {
+    throw new Error('ID видео YouTube не указан.');
+  }
+
+  const cleanVideoId = videoId.trim();
+
+  // Strategy 1: In-Tab Execution if any YouTube tab is open in browser
+  try {
+    const ytTabs = await chrome.tabs.query({ url: '*://*.youtube.com/*' });
+    if (ytTabs && ytTabs.length > 0) {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: ytTabs[0].id },
+        world: 'MAIN',
+        func: async (vId) => {
+          try {
+            const ytcfg = window.ytcfg;
+            const apiKey = (ytcfg && typeof ytcfg.get === 'function') ? ytcfg.get('INNERTUBE_API_KEY') : '';
+            const context = (ytcfg && typeof ytcfg.get === 'function') ? ytcfg.get('INNERTUBE_CONTEXT') : {
+              client: { clientName: 'WEB', clientVersion: '2.20261025.01.00', hl: 'ru', gl: 'RU' }
+            };
+            const endpoint = apiKey
+              ? `https://www.youtube.com/youtubei/v1/browse/edit_playlist?key=${apiKey}`
+              : `https://www.youtube.com/youtubei/v1/browse/edit_playlist`;
+
+            const res = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({
+                context: context,
+                playlistId: 'WL',
+                actions: [{ action: 'ACTION_ADD_VIDEO', addedVideoId: vId }]
+              })
+            });
+
+            if (res.ok) {
+              const data = await res.json();
+              return { success: true, status: data.status || 'STATUS_SUCCEEDED', data };
+            }
+            return { success: false, status: res.status, error: `HTTP ${res.status}` };
+          } catch (e) {
+            return { success: false, error: e.message };
+          }
+        },
+        args: [cleanVideoId]
+      });
+
+      if (results && results[0] && results[0].result && results[0].result.success) {
+        return { success: true, videoId: cleanVideoId, method: 'in_tab_innertube' };
+      }
+    }
+  } catch (tabErr) {
+    console.warn('In-tab execution fallback to service worker fetch:', tabErr);
+  }
+
+  // Strategy 2: Direct InnerTube request with SAPISID cookie & SAPISIDHASH signature
+  let sapisidHash = '';
+  try {
+    const cookie = await chrome.cookies.get({ url: 'https://www.youtube.com', name: 'SAPISID' });
+    if (cookie && cookie.value) {
+      const timestamp = Math.floor(Date.now() / 1000);
+      const origin = 'https://www.youtube.com';
+      const payload = `${timestamp} ${cookie.value} ${origin}`;
+      const encoder = new TextEncoder();
+      const data = encoder.encode(payload);
+      const hashBuffer = await crypto.subtle.digest('SHA-1', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const sha1Hex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      sapisidHash = `${timestamp}_${sha1Hex}`;
+    }
+  } catch (cookieErr) {
+    console.warn('Could not read SAPISID cookie:', cookieErr);
+  }
+
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-Origin': 'https://www.youtube.com'
+  };
+
+  if (sapisidHash) {
+    headers['Authorization'] = `SAPISIDHASH ${sapisidHash}`;
+    headers['X-Goog-AuthUser'] = '0';
+  }
+
+  const requestBody = {
+    context: {
+      client: {
+        clientName: 'WEB',
+        clientVersion: '2.20261025.01.00',
+        hl: 'ru',
+        gl: 'RU'
+      }
+    },
+    playlistId: 'WL',
+    actions: [
+      {
+        action: 'ACTION_ADD_VIDEO',
+        addedVideoId: cleanVideoId
+      }
+    ]
+  };
+
+  // Try browse/edit_playlist
+  try {
+    const res = await fetch('https://www.youtube.com/youtubei/v1/browse/edit_playlist', {
+      method: 'POST',
+      headers: headers,
+      credentials: 'include',
+      body: JSON.stringify(requestBody)
+    });
+
+    if (res.ok) {
+      const json = await res.json();
+      if (!json.error) {
+        return { success: true, videoId: cleanVideoId, method: 'direct_innertube' };
+      }
+    }
+  } catch (e) {
+    // fallback to playlist/edit
+  }
+
+  // Try playlist/edit
+  try {
+    const res2 = await fetch('https://www.youtube.com/youtubei/v1/playlist/edit', {
+      method: 'POST',
+      headers: headers,
+      credentials: 'include',
+      body: JSON.stringify(requestBody)
+    });
+
+    if (res2.ok) {
+      const json2 = await res2.json();
+      if (!json2.error) {
+        return { success: true, videoId: cleanVideoId, method: 'playlist_edit_innertube' };
+      }
+    }
+  } catch (e2) {
+    // error
+  }
+
+  if (!sapisidHash) {
+    throw new Error('Авторизация YouTube не найдена. Пожалуйста, откройте youtube.com и войдите в свой аккаунт в Chrome.');
+  }
+
+  throw new Error('Не удалось добавить видео в «Смотреть позже». Проверьте авторизацию на youtube.com.');
+}
+
 /**
  * Command Dispatcher - Pure Chrome API Executor
  */
@@ -917,6 +1066,11 @@ async function executeAgentCommand(action, params) {
       return await importSessionJson(raw);
     }
 
+    case 'youtube_watch_later': {
+      const videoId = params.videoId || params.video_id || params.id;
+      return await addVideoToYouTubeWatchLater(videoId);
+    }
+
     default:
       throw new Error(`Unknown command action: ${action}`);
   }
@@ -938,7 +1092,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'get_tabs', 'close_duplicate_tabs', 'close_tabs', 'ungroup_all_tabs',
     'apply_layout', 'activate_tab', 'create_tab',
     'get_live_session', 'open_manager',
-    'save_session', 'list_sessions', 'restore_session', 'export_session_json', 'delete_session', 'rename_session', 'import_session_json'
+    'save_session', 'list_sessions', 'restore_session', 'export_session_json', 'delete_session', 'rename_session', 'import_session_json',
+    'youtube_watch_later'
   ];
 
   if (supportedActions.includes(message.action)) {

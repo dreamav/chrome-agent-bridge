@@ -1152,6 +1152,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         <button class="btn-preview-open" type="button" title="Открыть в Chrome">
           ${openBtnText}
         </button>
+        ${ytVideoId ? `
+          <button class="btn-preview-watch-later" type="button" title="Добавить в плейлист «Смотреть позже» вашего YouTube-аккаунта">
+            <span>⏱️</span> В «Смотреть позже»
+          </button>
+        ` : ''}
         <button class="btn-preview-copy" type="button" title="Скопировать ссылку в буфер">
           <span>🔗</span> Скопировать ссылку
         </button>
@@ -1198,6 +1203,33 @@ document.addEventListener('DOMContentLoaded', async () => {
       e.stopPropagation();
       openOrSwitchToTab(tab);
     });
+
+    // Connect Watch Later Button
+    const btnWatchLater = tabHoverPreview.querySelector('.btn-preview-watch-later');
+    if (btnWatchLater && ytVideoId) {
+      btnWatchLater.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const origHtml = btnWatchLater.innerHTML;
+        btnWatchLater.disabled = true;
+        btnWatchLater.innerHTML = '<span>⏳</span> Добавляем...';
+
+        chrome.runtime.sendMessage({
+          action: 'youtube_watch_later',
+          params: { videoId: ytVideoId }
+        }, (res) => {
+          if (res && res.success) {
+            btnWatchLater.innerHTML = '<span>✓</span> В «Смотреть позже»!';
+            btnWatchLater.classList.add('success-glow');
+            showToast(`✓ Добавлено в «Смотреть позже» на вашем YouTube!`, 3500);
+          } else {
+            btnWatchLater.disabled = false;
+            btnWatchLater.innerHTML = origHtml;
+            const err = res?.error || 'Не удалось добавить видео в YouTube';
+            showToast(`⚠️ ${err}`, 4500);
+          }
+        });
+      });
+    }
 
     const btnCopy = tabHoverPreview.querySelector('.btn-preview-copy');
     btnCopy.addEventListener('click', (e) => {
