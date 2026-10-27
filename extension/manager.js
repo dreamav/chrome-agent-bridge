@@ -28,6 +28,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnCollapseAll = document.getElementById('btnCollapseAll');
 
   const selectedSessionTitle = document.getElementById('selectedSessionTitle');
+  const sessionTitleInput = document.getElementById('sessionTitleInput');
+  const btnEditTitleDirect = document.getElementById('btnEditTitleDirect');
+  const btnRenameCurrent = document.getElementById('btnRenameCurrent');
   const selectedSessionTag = document.getElementById('selectedSessionTag');
   const metaDate = document.getElementById('metaDate');
   const metaStats = document.getElementById('metaStats');
@@ -69,6 +72,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let activeSession = null; // Either liveSession or a saved session
   let searchQuery = '';
   let showAllInCurrentSession = false; // Toggle to view all tabs of active session even during search
+  let isEditingTitle = false;
   const collapsedGroups = new Set(); // Group keys collapsed by user
   const collapsedWindows = new Set(); // Window keys collapsed by user
 
@@ -391,6 +395,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         </div>
         <div class="session-nav-actions">
           <button class="btn-icon-mini btn-quick-restore" title="Восстановить сессию" data-id="${session.id}">⚡</button>
+          <button class="btn-icon-mini btn-rename-sidebar" title="Переименовать" data-id="${session.id}">✏️</button>
           <button class="btn-icon-mini btn-export-sidebar" title="Экспорт JSON" data-id="${session.id}">📥</button>
           <button class="btn-icon-mini btn-delete btn-delete-sidebar" title="Удалить" data-id="${session.id}">🗑️</button>
         </div>
@@ -402,10 +407,24 @@ document.addEventListener('DOMContentLoaded', async () => {
         selectSession(session);
       });
 
+      // Double-click on session title to rename
+      card.querySelector('.session-nav-title').addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        selectSession(session);
+        startEditingSessionTitle(session);
+      });
+
       // Quick Restore button
       card.querySelector('.btn-quick-restore').addEventListener('click', (e) => {
         e.stopPropagation();
         restoreFullSession(session);
+      });
+
+      // Rename button
+      card.querySelector('.btn-rename-sidebar').addEventListener('click', (e) => {
+        e.stopPropagation();
+        selectSession(session);
+        startEditingSessionTitle(session);
       });
 
       // Export button
@@ -422,6 +441,76 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       savedSessionsList.appendChild(card);
     });
+  }
+
+  // --- Inline Session Title Renaming ---
+  function startEditingSessionTitle(sessionToEdit) {
+    const target = sessionToEdit || activeSession;
+    if (!target || target.isLive) return;
+
+    if (!activeSession || activeSession.id !== target.id) {
+      selectSession(target);
+    }
+
+    isEditingTitle = true;
+    const currentName = target.name || target.title || '';
+    sessionTitleInput.value = currentName;
+    selectedSessionTitle.classList.add('hidden');
+    btnEditTitleDirect.classList.add('hidden');
+    sessionTitleInput.classList.remove('hidden');
+    sessionTitleInput.focus();
+    sessionTitleInput.select();
+  }
+
+  async function saveEditedSessionTitle() {
+    if (!isEditingTitle) return;
+    const newName = sessionTitleInput.value.trim();
+    const targetSession = activeSession;
+
+    sessionTitleInput.classList.add('hidden');
+    selectedSessionTitle.classList.remove('hidden');
+    if (targetSession && !targetSession.isLive) {
+      btnEditTitleDirect.classList.remove('hidden');
+    }
+    isEditingTitle = false;
+
+    if (!targetSession || targetSession.isLive) return;
+
+    const oldName = targetSession.name || targetSession.title || '';
+    if (!newName || newName === oldName) {
+      selectedSessionTitle.textContent = oldName;
+      return;
+    }
+
+    chrome.runtime.sendMessage({
+      action: 'rename_session',
+      params: { sessionId: targetSession.id, newName: newName }
+    }, async (res) => {
+      if (res && res.success) {
+        targetSession.name = newName;
+        targetSession.title = newName;
+        selectedSessionTitle.textContent = newName;
+        showToast(`Сессия переименована: «${newName}»`);
+        await fetchSavedSessions();
+        renderSidebarSessions();
+      } else {
+        selectedSessionTitle.textContent = oldName;
+        showToast(`Ошибка переименования: ${res?.error || 'Неизвестная ошибка'}`);
+      }
+    });
+  }
+
+  function cancelEditingSessionTitle() {
+    if (!isEditingTitle) return;
+    isEditingTitle = false;
+    sessionTitleInput.classList.add('hidden');
+    selectedSessionTitle.classList.remove('hidden');
+    if (activeSession && !activeSession.isLive) {
+      btnEditTitleDirect.classList.remove('hidden');
+    }
+    if (activeSession) {
+      selectedSessionTitle.textContent = activeSession.name || activeSession.title || '';
+    }
   }
 
   // --- Select Active Session ---
@@ -451,9 +540,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   function renderActiveSessionDetails() {
     if (!activeSession) return;
 
+    // Reset inline edit state if switching sessions
+    if (isEditingTitle) {
+      isEditingTitle = false;
+    }
+
     // Header updates
-    selectedSessionTitle.textContent = activeSession.name;
+    selectedSessionTitle.textContent = activeSession.name || activeSession.title || 'Сессия';
     if (activeSession.isLive) {
+      selectedSessionTitle.classList.remove('can-edit');
+      selectedSessionTitle.removeAttribute('title');
+      sessionTitleInput.classList.add('hidden');
+      selectedSessionTitle.classList.remove('hidden');
+      btnEditTitleDirect.classList.add('hidden');
+      btnRenameCurrent.classList.add('hidden');
+
       selectedSessionTag.textContent = 'LIVE';
       selectedSessionTag.className = 'session-tag live';
       metaDate.textContent = 'Живое состояние браузера';
@@ -462,6 +563,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       btnRefreshLive.classList.remove('hidden');
       btnRestoreAll.style.display = 'none'; // Already open
     } else {
+      selectedSessionTitle.classList.add('can-edit');
+      selectedSessionTitle.setAttribute('title', 'Кликните, чтобы переименовать');
+      sessionTitleInput.classList.add('hidden');
+      selectedSessionTitle.classList.remove('hidden');
+      btnEditTitleDirect.classList.remove('hidden');
+      btnRenameCurrent.classList.remove('hidden');
+
       selectedSessionTag.textContent = 'SAVED';
       selectedSessionTag.className = 'session-tag saved';
       const dateStr = new Date(activeSession.timestamp).toLocaleString('ru-RU', {
@@ -1366,23 +1474,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     showToast('Живой список вкладок обновлен!');
   });
 
-  // Save current live state as new saved session
+  // Save current live state as new saved session (Seamlessly saves & focuses inline rename)
   async function handleSaveCurrent() {
     const defaultName = getFormattedNow();
-    const name = prompt('Введите название сессии:', defaultName);
-    if (name === null) return; // User cancelled
 
-    const finalName = name.trim() || defaultName;
     chrome.runtime.sendMessage({
       action: 'save_session',
-      params: { name: finalName }
+      params: { name: defaultName }
     }, async (res) => {
       if (res && res.success) {
         const saved = res.result;
-        showToast(`Сессия «${saved.name}» сохранена (${saved.tabCount} вкл., ${saved.groupCount} групп)!`);
+        showToast(`Сессия сохранена! Введите название или нажмите Enter.`);
         await fetchSavedSessions();
         renderSidebarSessions();
         selectSession(saved);
+
+        // Automatically activate inline title editing so the user can easily rename right away!
+        setTimeout(() => {
+          startEditingSessionTitle(saved);
+        }, 80);
       } else {
         showToast('Ошибка сохранения сессии.');
       }
@@ -1391,6 +1501,43 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   btnSaveCurrent.addEventListener('click', handleSaveCurrent);
   btnSaveLiveAsNew.addEventListener('click', handleSaveCurrent);
+
+  // --- Session Title Renaming Listeners ---
+  selectedSessionTitle.addEventListener('click', () => {
+    if (activeSession && !activeSession.isLive) {
+      startEditingSessionTitle(activeSession);
+    }
+  });
+
+  if (btnEditTitleDirect) {
+    btnEditTitleDirect.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startEditingSessionTitle(activeSession);
+    });
+  }
+
+  if (btnRenameCurrent) {
+    btnRenameCurrent.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startEditingSessionTitle(activeSession);
+    });
+  }
+
+  sessionTitleInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveEditedSessionTitle();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelEditingSessionTitle();
+    }
+  });
+
+  sessionTitleInput.addEventListener('blur', () => {
+    if (isEditingTitle) {
+      saveEditedSessionTitle();
+    }
+  });
 
   // ==========================================================================
   // SESSION BUDDY OFFICIAL BACKUP IMPORT (nxs.json.v2)

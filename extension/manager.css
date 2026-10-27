@@ -552,6 +552,14 @@ html, body {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+}
+
+.title-edit-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .title-with-badge h1 {
@@ -562,6 +570,59 @@ html, body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.title-edit-container h1.can-edit {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.title-edit-container h1.can-edit:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--cyan-neon);
+}
+
+.session-title-edit-input {
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid var(--cyan-neon);
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.3);
+  border-radius: 6px;
+  padding: 4px 10px;
+  outline: none;
+  min-width: 260px;
+  max-width: 460px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.session-title-edit-input:focus {
+  border-color: #67e8f9;
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.5);
+}
+
+.btn-icon-inline {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  opacity: 0.6;
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+
+.btn-icon-inline:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.12);
+  transform: scale(1.1);
 }
 
 .session-tag {

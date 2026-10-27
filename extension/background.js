@@ -431,6 +431,24 @@ async function deleteSession(sessionId) {
   return { success: true, deleted_id: sessionId, remaining_count: filtered.length };
 }
 
+// 4.1. Rename Session
+async function renameSession(sessionId, newName) {
+  if (!newName || typeof newName !== 'string' || !newName.trim()) {
+    throw new Error('Имя сессии не может быть пустым.');
+  }
+  const cleanName = newName.trim();
+  const stored = await chrome.storage.local.get(['saved_sessions']);
+  const list = Array.isArray(stored.saved_sessions) ? stored.saved_sessions : [];
+  const session = list.find(s => s.id === sessionId);
+  if (!session) {
+    throw new Error(`Сессия с ID '${sessionId}' не найдена.`);
+  }
+  session.name = cleanName;
+  session.title = cleanName;
+  await chrome.storage.local.set({ saved_sessions: list });
+  return { success: true, session: session };
+}
+
 // 5. Restore Session, Single Window, or Single Group
 async function restoreSession(sessionId, targetGroupId = null, options = {}) {
   const stored = await chrome.storage.local.get(['saved_sessions']);
@@ -888,6 +906,12 @@ async function executeAgentCommand(action, params) {
       return await deleteSession(sId);
     }
 
+    case 'rename_session': {
+      const sId = params.sessionId || params.session_id || params.id;
+      const newName = params.newName || params.name || params.title;
+      return await renameSession(sId, newName);
+    }
+
     case 'import_session_json': {
       const raw = params.session || params.sessionData || params.data || params.json || params;
       return await importSessionJson(raw);
@@ -914,7 +938,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'get_tabs', 'close_duplicate_tabs', 'close_tabs', 'ungroup_all_tabs',
     'apply_layout', 'activate_tab', 'create_tab',
     'get_live_session', 'open_manager',
-    'save_session', 'list_sessions', 'restore_session', 'export_session_json', 'delete_session', 'import_session_json'
+    'save_session', 'list_sessions', 'restore_session', 'export_session_json', 'delete_session', 'rename_session', 'import_session_json'
   ];
 
   if (supportedActions.includes(message.action)) {

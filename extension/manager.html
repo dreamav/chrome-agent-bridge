@@ -110,7 +110,11 @@
           </button>
           <div class="details-title-group">
             <div class="title-with-badge">
-              <h1 id="selectedSessionTitle">Живые вкладки прямо сейчас</h1>
+              <div class="title-edit-container">
+                <h1 id="selectedSessionTitle">Живые вкладки прямо сейчас</h1>
+                <input id="sessionTitleInput" class="session-title-edit-input hidden" type="text" maxlength="120" placeholder="Название сессии...">
+                <button id="btnEditTitleDirect" class="btn-icon-inline hidden" type="button" title="Переименовать сессию">✏️</button>
+              </div>
               <span id="selectedSessionTag" class="session-tag live">LIVE</span>
             </div>
             <div id="selectedSessionMeta" class="details-meta-row">
@@ -143,6 +147,9 @@
           <input type="file" id="sessionBuddyFileInput" accept=".json" style="display: none;">
           <button id="btnSaveLiveAsNew" class="btn btn-accent" type="button" title="Сохранить текущий слепок в историю">
             <span>💾</span> Сохранить в сессии
+          </button>
+          <button id="btnRenameCurrent" class="btn btn-secondary hidden" type="button" title="Переименовать эту сессию">
+            <span>✏️</span> Переименовать
           </button>
           <button id="btnDeleteCurrent" class="btn btn-danger hidden" type="button" title="Удалить эту сессию">
             <span>🗑️</span>
