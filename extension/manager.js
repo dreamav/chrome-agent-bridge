@@ -851,9 +851,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ==========================================================================
   // TAB HOVER PREVIEW CONTROLLER (Glassmorphism & YouTube Posters)
   // ==========================================================================
-  // ==========================================================================
-  // TAB HOVER PREVIEW CONTROLLER (Glassmorphism & YouTube Posters)
-  // ==========================================================================
   const tabHoverPreview = document.getElementById('tabHoverPreview');
   let hoverShowTimer = null;
   let hoverHideTimer = null;
@@ -893,6 +890,180 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?.*v=|shorts\/|embed\/|live\/))([a-zA-Z0-9_-]{11})/);
     return match ? match[1] : null;
+  }
+
+  // --- Smart Tab Switcher / Opener (Session Buddy Style) ---
+  function findMatchingOpenTab(targetUrl, openTabs) {
+    if (!targetUrl || !Array.isArray(openTabs) || openTabs.length === 0) return null;
+
+    // 1. Exact URL match
+    const exactMatch = openTabs.find(t => t.url === targetUrl);
+    if (exactMatch) return exactMatch;
+
+    // 2. Normalized match (without trailing slash)
+    const stripTrailing = u => (u || '').replace(/\/+$/, '');
+    const normTarget = stripTrailing(targetUrl);
+    const normMatch = openTabs.find(t => t.url && stripTrailing(t.url) === normTarget);
+    if (normMatch) return normMatch;
+
+    let targetObj;
+    try {
+      targetObj = new URL(targetUrl);
+    } catch (e) {
+      return null;
+    }
+
+    if (!['http:', 'https:'].includes(targetObj.protocol)) {
+      return null;
+    }
+
+    const targetHost = targetObj.hostname.replace(/^www\./, '').toLowerCase();
+
+    // 3. Special service handlers:
+    // a) YouTube: match by videoId
+    if (targetHost === 'youtube.com' || targetHost === 'm.youtube.com' || targetHost === 'youtu.be') {
+      const targetVideoId = extractYouTubeVideoId(targetUrl);
+      if (targetVideoId) {
+        const ytMatch = openTabs.find(t => t.url && extractYouTubeVideoId(t.url) === targetVideoId);
+        if (ytMatch) return ytMatch;
+      }
+    }
+
+    // b) Gmail: match mail.google.com (including specific /u/0 account if present)
+    if (targetHost === 'mail.google.com') {
+      const targetAccountMatch = targetUrl.match(/\/u\/(\d+)/);
+      const targetAccount = targetAccountMatch ? targetAccountMatch[1] : null;
+
+      const gmailMatch = openTabs.find(t => {
+        try {
+          const oObj = new URL(t.url);
+          if (oObj.hostname.replace(/^www\./, '').toLowerCase() !== 'mail.google.com') return false;
+          if (targetAccount !== null) {
+            const oAccountMatch = t.url.match(/\/u\/(\d+)/);
+            const oAccount = oAccountMatch ? oAccountMatch[1] : null;
+            return oAccount === targetAccount;
+          }
+          return true;
+        } catch (e) {
+          return false;
+        }
+      });
+      if (gmailMatch) return gmailMatch;
+    }
+
+    // c) Web Apps with SPA hash or user prefix (WhatsApp, Telegram Web, Discord, Slack, etc.)
+    const isSinglePageApp = (
+      targetHost === 'web.whatsapp.com' ||
+      targetHost === 'web.telegram.org' ||
+      targetHost.includes('discord.com') ||
+      targetHost.includes('slack.com')
+    );
+
+    if (isSinglePageApp) {
+      const appMatch = openTabs.find(t => {
+        try {
+          const oObj = new URL(t.url);
+          const oHost = oObj.hostname.replace(/^www\./, '').toLowerCase();
+          return oHost === targetHost;
+        } catch (e) {
+          return false;
+        }
+      });
+      if (appMatch) return appMatch;
+    }
+
+    // d) DigitalOcean Droplets
+    if (targetHost === 'cloud.digitalocean.com' && targetObj.pathname.startsWith('/droplets')) {
+      const doMatch = openTabs.find(t => {
+        try {
+          const oObj = new URL(t.url);
+          return oObj.hostname.replace(/^www\./, '').toLowerCase() === 'cloud.digitalocean.com' &&
+                 oObj.pathname.startsWith('/droplets');
+        } catch (e) {
+          return false;
+        }
+      });
+      if (doMatch) return doMatch;
+    }
+
+    // 4. Base URL match (without hash and trailing slashes)
+    const stripHashAndSlash = u => (u || '').split('#')[0].replace(/\/+$/, '');
+    const baseTarget = stripHashAndSlash(targetUrl);
+    const baseMatch = openTabs.find(t => t.url && stripHashAndSlash(t.url) === baseTarget);
+    if (baseMatch) return baseMatch;
+
+    // 5. Origin + Pathname match
+    const originPathMatch = openTabs.find(t => {
+      try {
+        const oObj = new URL(t.url);
+        const oHost = oObj.hostname.replace(/^www\./, '').toLowerCase();
+        if (oHost !== targetHost) return false;
+        if (oObj.pathname.replace(/\/+$/, '') !== targetObj.pathname.replace(/\/+$/, '')) return false;
+
+        // If target has search query, verify it matches
+        if (targetObj.search) {
+          return oObj.search === targetObj.search;
+        }
+        return true;
+      } catch (e) {
+        return false;
+      }
+    });
+    if (originPathMatch) return originPathMatch;
+
+    return null;
+  }
+
+  async function openOrSwitchToTab(tab) {
+    if (!tab || !tab.url) return;
+
+    hideTabHoverPreview(true);
+
+    const targetUrl = tab.url;
+    const tabTitle = tab.title || extractDomain(targetUrl) || 'Вкладка';
+
+    try {
+      // 1. If tab has an active Chrome tab ID (e.g. from Live session), test if it exists
+      if (tab.id && typeof tab.id === 'number' && tab.id > 0) {
+        try {
+          const existingTab = await chrome.tabs.get(tab.id);
+          if (existingTab && existingTab.id) {
+            await chrome.tabs.update(existingTab.id, { active: true });
+            if (existingTab.windowId) {
+              await chrome.windows.update(existingTab.windowId, { focused: true });
+            }
+            showToast(`⚡ Переключено на вкладку → ${existingTab.title || tabTitle}`);
+            return;
+          }
+        } catch (e) {
+          // Tab ID was not found in active browser, fall through to URL matching
+        }
+      }
+
+      // 2. Query all open tabs in all Chrome windows to find matching URL
+      const openTabs = await chrome.tabs.query({});
+      const matchedTab = findMatchingOpenTab(targetUrl, openTabs);
+
+      if (matchedTab && matchedTab.id) {
+        // Tab is already open! Switch to it and focus its window
+        await chrome.tabs.update(matchedTab.id, { active: true });
+        if (matchedTab.windowId) {
+          await chrome.windows.update(matchedTab.windowId, { focused: true });
+        }
+        showToast(`⚡ Переключено на открытую вкладку → ${matchedTab.title || tabTitle}`);
+        return;
+      }
+
+      // 3. Tab is not open anywhere in Chrome -> Open in new tab
+      const newTab = await chrome.tabs.create({ url: targetUrl, active: true });
+      if (newTab && newTab.windowId) {
+        await chrome.windows.update(newTab.windowId, { focused: true });
+      }
+      showToast(`🌐 Вкладка открыта → ${tabTitle}`);
+    } catch (err) {
+      console.error('Error switching or opening tab:', err);
+      chrome.tabs.create({ url: targetUrl, active: true });
+    }
   }
 
   function showTabHoverPreview(tab, context, itemEl) {
@@ -1001,18 +1172,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (mediaEl) {
       mediaEl.addEventListener('click', (e) => {
         e.stopPropagation();
-        chrome.tabs.create({ url: tab.url, active: true });
-        showToast(`Видео открыто → ${tab.title || domain}`);
-        hideTabHoverPreview(true);
+        openOrSwitchToTab(tab);
       });
     }
 
     // Connect Action Buttons in Hover Card
     tabHoverPreview.querySelector('.btn-preview-open').addEventListener('click', (e) => {
       e.stopPropagation();
-      chrome.tabs.create({ url: tab.url, active: true });
-      showToast(`Вкладка открыта → ${tab.title || domain}`);
-      hideTabHoverPreview(true);
+      openOrSwitchToTab(tab);
     });
 
     const btnCopy = tabHoverPreview.querySelector('.btn-preview-copy');
@@ -1196,13 +1363,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       hideTabHoverPreview(false);
     });
 
-    // Click handler: Point opening (opens ONLY this tab directly in Chrome!)
+    // Click handler: Point opening (switches to tab if already open, otherwise opens directly in Chrome!)
     item.addEventListener('click', (e) => {
       if (e.target.closest('.btn-copy-url')) return;
       if (!tab.url) return;
-      hideTabHoverPreview(true);
-      chrome.tabs.create({ url: tab.url, active: true });
-      showToast(`Вкладка открыта → ${tab.title || domain}`);
+      openOrSwitchToTab(tab);
     });
 
     // Copy URL button
