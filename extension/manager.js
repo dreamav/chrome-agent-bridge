@@ -53,6 +53,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const sessionContent = document.getElementById('sessionContent');
   const toast = document.getElementById('toast');
 
+  // --- Floating Batch Action Bar Elements ---
+  const batchActionBar = document.getElementById('batchActionBar');
+  const batchSelectedSummary = document.getElementById('batchSelectedSummary');
+  const btnBatchRestore = document.getElementById('btnBatchRestore');
+  const btnBatchDelete = document.getElementById('btnBatchDelete');
+  const btnBatchClear = document.getElementById('btnBatchClear');
+
   // --- Chrome Group Colors ---
   const CHROME_GROUP_COLORS = {
     grey: '#9aa0a6',
@@ -76,7 +83,70 @@ document.addEventListener('DOMContentLoaded', async () => {
   const collapsedGroups = new Set(); // Group keys collapsed by user
   const collapsedWindows = new Set(); // Window keys collapsed by user
 
+  // --- Multi-Selection State for Saved Sessions ---
+  const selectedItems = {
+    windows: new Set(), // Set of 'win_<winIndex>'
+    groups: new Set(),  // Set of 'win_<winIndex>_grp_<groupId>'
+    tabs: new Set()     // Set of 'win_<winIndex>_tab_<tabIndex>'
+  };
+
   // --- Helpers ---
+  function sanitizeUrl(url) {
+    if (!url || typeof url !== 'string') return 'about:blank';
+    const u = url.trim();
+    if (u.startsWith('chrome://') || u.startsWith('chrome-extension://') || u.startsWith('edge://')) {
+      return 'about:blank';
+    }
+    return u;
+  }
+
+  function getNoun(number, one, two, five) {
+    let n = Math.abs(number);
+    n %= 100;
+    if (n >= 5 && n <= 20) return five;
+    n %= 10;
+    if (n === 1) return one;
+    if (n >= 2 && n <= 4) return two;
+    return five;
+  }
+
+  function clearSelection() {
+    selectedItems.windows.clear();
+    selectedItems.groups.clear();
+    selectedItems.tabs.clear();
+    updateBatchBar();
+    document.querySelectorAll('.session-cb').forEach(cb => {
+      cb.checked = false;
+      cb.indeterminate = false;
+    });
+    document.querySelectorAll('.tab-item.is-selected, .window-card.is-selected').forEach(el => {
+      el.classList.remove('is-selected');
+    });
+  }
+
+  function updateBatchBar() {
+    if (!batchActionBar) return;
+
+    const winCount = selectedItems.windows.size;
+    const grpCount = selectedItems.groups.size;
+    const tabCount = selectedItems.tabs.size;
+    const totalSelected = winCount + grpCount + tabCount;
+
+    if (totalSelected === 0) {
+      batchActionBar.classList.add('hidden');
+      return;
+    }
+
+    batchActionBar.classList.remove('hidden');
+
+    const parts = [];
+    if (winCount > 0) parts.push(`${winCount} ${getNoun(winCount, 'окно', 'окна', 'окон')}`);
+    if (grpCount > 0) parts.push(`${grpCount} ${getNoun(grpCount, 'группу', 'группы', 'групп')}`);
+    if (tabCount > 0) parts.push(`${tabCount} ${getNoun(tabCount, 'вкладку', 'вкладки', 'вкладок')}`);
+
+    batchSelectedSummary.textContent = `Выбрано: ${parts.join(', ')}`;
+  }
+
   function showToast(message, duration = 3000) {
     toast.textContent = message;
     toast.style.display = 'block';
@@ -517,6 +587,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   function selectSession(session) {
     activeSession = session;
     showAllInCurrentSession = false; // Reset to focused matches view on session switch
+    clearSelection(); // Reset any batch selection when switching sessions
 
     // Update active highlight in sidebar
     if (session.isLive) {
@@ -643,23 +714,25 @@ document.addEventListener('DOMContentLoaded', async () => {
       const winTabs = win.tabs || [];
       const winGroups = win.groups || [];
 
-      // Group tabs by groupId
+      // Group tabs by groupId, preserving original tabIndex
       const groupedTabsMap = new Map();
       const ungroupedTabs = [];
 
-      winTabs.forEach(tab => {
+      winTabs.forEach((tab, originalTabIndex) => {
+        const itemWithIdx = { tab, tabIndex: originalTabIndex };
         if (tab.groupId && tab.groupId > 0) {
           if (!groupedTabsMap.has(tab.groupId)) {
             groupedTabsMap.set(tab.groupId, []);
           }
-          groupedTabsMap.get(tab.groupId).push(tab);
+          groupedTabsMap.get(tab.groupId).push(itemWithIdx);
         } else {
-          ungroupedTabs.push(tab);
+          ungroupedTabs.push(itemWithIdx);
         }
       });
 
       // Filter tabs if search is active AND showAllInCurrentSession is false
-      const matchesTab = (t) => {
+      const matchesTab = (item) => {
+        const t = item.tab;
         if (!filter || showAllInCurrentSession) return true;
         if (hasAnyTabMatch) {
           const text = `${t.title || ''} ${t.url || ''}`.toLowerCase();
@@ -675,7 +748,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       winGroups.forEach(g => {
         const tabsInGroup = groupedTabsMap.get(g.id) || [];
         const groupTitleMatch = (g.title || '').toLowerCase().includes(filter);
-        const filteredGroupTabs = tabsInGroup.filter(t => matchesTab(t) || (!showAllInCurrentSession && groupTitleMatch));
+        const filteredGroupTabs = tabsInGroup.filter(item => matchesTab(item) || (!showAllInCurrentSession && groupTitleMatch));
         if (filteredGroupTabs.length > 0 || (!filter && tabsInGroup.length > 0) || (showAllInCurrentSession && tabsInGroup.length > 0)) {
           filteredGroups.push({
             groupDef: g,
@@ -693,31 +766,45 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Create Window Card DOM
       const winKey = `${activeSession.id}_win_${winIndex}`;
       const isWinCollapsed = collapsedWindows.has(winKey);
+      const isLive = Boolean(activeSession.isLive);
+      const isWinSelected = selectedItems.windows.has(`win_${winIndex}`);
 
       const winCard = document.createElement('div');
-      winCard.className = `window-card ${isWinCollapsed ? 'collapsed' : ''}`;
+      winCard.className = `window-card ${isWinCollapsed ? 'collapsed' : ''} ${isWinSelected ? 'is-selected' : ''}`;
 
       const winTitle = `Окно ${winIndex + 1}`;
       const winBadge = `${winTabs.length} вкладок, ${winGroups.length} групп`;
 
+      const winCheckboxHtml = !isLive
+        ? `<label class="session-cb-label" title="Выбрать окно для массовых действий"><input type="checkbox" class="session-cb session-cb-window" data-win-idx="${winIndex}" ${isWinSelected ? 'checked' : ''}></label>`
+        : '';
+
+      const winDeleteBtnHtml = !isLive
+        ? `<button class="btn-mini-action btn-danger-action btn-delete-window" data-win-idx="${winIndex}" title="Удалить это окно из сохранённой сессии">🗑️ Удалить окно</button>`
+        : '';
+
       winCard.innerHTML = `
         <div class="window-header" title="Кликните, чтобы свернуть/развернуть окно">
           <div class="window-title-group">
+            ${winCheckboxHtml}
             <span class="window-toggle-arrow">▼</span>
             <span class="window-icon">🪟</span>
             <span class="window-title">${winTitle}</span>
             <span class="window-stats">(${winBadge})</span>
           </div>
-          <button class="btn-mini-action btn-restore-window" data-win-idx="${winIndex}" title="Восстановить только это окно">
-            ⚡ Восстановить окно
-          </button>
+          <div class="window-actions-right">
+            <button class="btn-mini-action btn-restore-window" data-win-idx="${winIndex}" title="Восстановить только это окно">
+              ⚡ Восстановить окно
+            </button>
+            ${winDeleteBtnHtml}
+          </div>
         </div>
         <div class="window-body"></div>
       `;
 
       // Window collapse/expand toggle
       winCard.querySelector('.window-header').addEventListener('click', (e) => {
-        if (e.target.closest('.btn-restore-window')) return;
+        if (e.target.closest('.btn-mini-action') || e.target.closest('.session-cb-label')) return;
         if (winCard.classList.contains('collapsed')) {
           winCard.classList.remove('collapsed');
           collapsedWindows.delete(winKey);
@@ -727,6 +814,58 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       });
 
+      // Window Checkbox: cascades to all groups and tabs in this window
+      const winCb = winCard.querySelector('.session-cb-window');
+      if (winCb) {
+        winCb.addEventListener('click', (e) => e.stopPropagation());
+        winCb.addEventListener('change', (e) => {
+          e.stopPropagation();
+          const checked = winCb.checked;
+          const winKeyId = `win_${winIndex}`;
+
+          if (checked) {
+            selectedItems.windows.add(winKeyId);
+            winCard.classList.add('is-selected');
+          } else {
+            selectedItems.windows.delete(winKeyId);
+            winCard.classList.remove('is-selected');
+          }
+
+          // Cascade to groups
+          winGroups.forEach(g => {
+            const gKey = `win_${winIndex}_grp_${g.id}`;
+            if (checked) selectedItems.groups.add(gKey);
+            else selectedItems.groups.delete(gKey);
+          });
+
+          // Cascade to tabs
+          winTabs.forEach((_, tIdx) => {
+            const tKey = `win_${winIndex}_tab_${tIdx}`;
+            if (checked) selectedItems.tabs.add(tKey);
+            else selectedItems.tabs.delete(tKey);
+          });
+
+          // Update DOM inside window
+          winCard.querySelectorAll('.session-cb-group, .session-cb-tab').forEach(c => {
+            c.checked = checked;
+          });
+          winCard.querySelectorAll('.tab-item').forEach(itemEl => {
+            itemEl.classList.toggle('is-selected', checked);
+          });
+
+          updateBatchBar();
+        });
+      }
+
+      // Delete Window button handler
+      const btnDelWin = winCard.querySelector('.btn-delete-window');
+      if (btnDelWin) {
+        btnDelWin.addEventListener('click', (e) => {
+          e.stopPropagation();
+          deleteWindowFromSession(winIndex);
+        });
+      }
+
       const winBody = winCard.querySelector('.window-body');
 
       // 1. Render Colored Tab Groups
@@ -735,28 +874,41 @@ document.addEventListener('DOMContentLoaded', async () => {
         const colorHex = CHROME_GROUP_COLORS[groupColor] || '#9aa0a6';
         const groupKey = `${activeSession.id}_win${winIndex}_grp${groupDef.id}`;
         const isCollapsed = collapsedGroups.has(groupKey) || (Boolean(groupDef.collapsed) && !collapsedGroups.has(`exp_${groupKey}`));
+        const isGrpSelected = selectedItems.groups.has(`win_${winIndex}_grp_${groupDef.id}`) || selectedItems.windows.has(`win_${winIndex}`);
 
         const groupCard = document.createElement('div');
         groupCard.className = `tab-group-card color-${groupColor} ${isCollapsed ? 'collapsed' : ''}`;
 
+        const grpCheckboxHtml = !isLive
+          ? `<label class="session-cb-label" title="Выбрать группу для массовых действий"><input type="checkbox" class="session-cb session-cb-group" data-win-idx="${winIndex}" data-group-id="${groupDef.id}" ${isGrpSelected ? 'checked' : ''}></label>`
+          : '';
+
+        const grpDeleteBtnHtml = !isLive
+          ? `<button class="btn-mini-action btn-danger-action btn-delete-group" data-win-idx="${winIndex}" data-group-id="${groupDef.id}" title="Удалить эту группу из сохранённой сессии">🗑️ Удалить группу</button>`
+          : '';
+
         groupCard.innerHTML = `
           <div class="tab-group-header">
             <div class="tab-group-left">
+              ${grpCheckboxHtml}
               <span class="group-toggle-arrow">▼</span>
               <span class="group-color-chip" style="background: ${colorHex};"></span>
               <span class="group-title">${groupDef.title || 'Без названия'}</span>
               <span class="group-count">${tabs.length} вкл.</span>
             </div>
-            <button class="btn-mini-action btn-restore-group" title="Восстановить только эту группу в текущее окно">
-              ⚡ Восстановить группу
-            </button>
+            <div class="tab-group-actions-right">
+              <button class="btn-mini-action btn-restore-group" title="Восстановить только эту группу в текущее окно">
+                ⚡ Восстановить группу
+              </button>
+              ${grpDeleteBtnHtml}
+            </div>
           </div>
           <div class="tab-group-items"></div>
         `;
 
         // Toggle collapse/expand on header click
         groupCard.querySelector('.tab-group-header').addEventListener('click', (e) => {
-          if (e.target.closest('.btn-restore-group')) return;
+          if (e.target.closest('.btn-mini-action') || e.target.closest('.session-cb-label')) return;
           if (groupCard.classList.contains('collapsed')) {
             groupCard.classList.remove('collapsed');
             collapsedGroups.delete(groupKey);
@@ -768,6 +920,51 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
         });
 
+        // Group Checkbox Handler (cascades to all tabs in this group)
+        const grpCb = groupCard.querySelector('.session-cb-group');
+        if (grpCb) {
+          grpCb.addEventListener('click', (e) => e.stopPropagation());
+          grpCb.addEventListener('change', (e) => {
+            e.stopPropagation();
+            const checked = grpCb.checked;
+            const gKey = `win_${winIndex}_grp_${groupDef.id}`;
+
+            if (checked) {
+              selectedItems.groups.add(gKey);
+            } else {
+              selectedItems.groups.delete(gKey);
+              selectedItems.windows.delete(`win_${winIndex}`);
+              if (winCb) winCb.checked = false;
+            }
+
+            // Cascade to tabs in this group
+            tabs.forEach(item => {
+              const tKey = `win_${winIndex}_tab_${item.tabIndex}`;
+              if (checked) selectedItems.tabs.add(tKey);
+              else selectedItems.tabs.delete(tKey);
+            });
+
+            groupCard.querySelectorAll('.session-cb-tab').forEach(c => {
+              c.checked = checked;
+            });
+            groupCard.querySelectorAll('.tab-item').forEach(itemEl => {
+              itemEl.classList.toggle('is-selected', checked);
+            });
+
+            checkIfWholeWindowSelected(winIndex, winTabs.length, winCard);
+            updateBatchBar();
+          });
+        }
+
+        // Delete Group Button
+        const btnDelGrp = groupCard.querySelector('.btn-delete-group');
+        if (btnDelGrp) {
+          btnDelGrp.addEventListener('click', (e) => {
+            e.stopPropagation();
+            deleteGroupFromSession(winIndex, groupDef.id);
+          });
+        }
+
         // Restore single group button
         groupCard.querySelector('.btn-restore-group').addEventListener('click', (e) => {
           e.stopPropagation();
@@ -775,8 +972,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
 
         const groupItemsContainer = groupCard.querySelector('.tab-group-items');
-        tabs.forEach(tab => {
-          groupItemsContainer.appendChild(createTabItemElement(tab, {
+        tabs.forEach(item => {
+          groupItemsContainer.appendChild(createTabItemElement(item.tab, {
+            winIndex,
+            tabIndex: item.tabIndex,
+            groupId: groupDef.id,
             groupTitle: groupDef.title,
             groupColor,
             windowTitle: winTitle
@@ -793,8 +993,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         ungroupedCard.innerHTML = `
           <div class="ungrouped-title">Вне групп (${filteredUngrouped.length})</div>
         `;
-        filteredUngrouped.forEach(tab => {
-          ungroupedCard.appendChild(createTabItemElement(tab, {
+        filteredUngrouped.forEach(item => {
+          ungroupedCard.appendChild(createTabItemElement(item.tab, {
+            winIndex,
+            tabIndex: item.tabIndex,
             isUngrouped: true,
             windowTitle: winTitle
           }));
@@ -1361,10 +1563,49 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // --- Create Tab Item DOM Element (Surgical Click-to-Open + Hover Preview) ---
+  // --- Helper: Synchronize Window Checkbox State from Tabs ---
+  function checkIfWholeWindowSelected(winIndex, totalTabsInWin, winCard) {
+    let selectedTabCount = 0;
+    for (let t = 0; t < totalTabsInWin; t++) {
+      if (selectedItems.tabs.has(`win_${winIndex}_tab_${t}`)) {
+        selectedTabCount++;
+      }
+    }
+    const winCb = winCard ? winCard.querySelector('.session-cb-window') : null;
+    if (selectedTabCount === totalTabsInWin && totalTabsInWin > 0) {
+      selectedItems.windows.add(`win_${winIndex}`);
+      if (winCb) {
+        winCb.checked = true;
+        winCb.indeterminate = false;
+      }
+      if (winCard) winCard.classList.add('is-selected');
+    } else if (selectedTabCount > 0) {
+      selectedItems.windows.delete(`win_${winIndex}`);
+      if (winCb) {
+        winCb.checked = false;
+        winCb.indeterminate = true;
+      }
+      if (winCard) winCard.classList.remove('is-selected');
+    } else {
+      selectedItems.windows.delete(`win_${winIndex}`);
+      if (winCb) {
+        winCb.checked = false;
+        winCb.indeterminate = false;
+      }
+      if (winCard) winCard.classList.remove('is-selected');
+    }
+  }
+
+  // --- Create Tab Item DOM Element (Surgical Click-to-Open + Hover Preview + Selection & Deletion) ---
   function createTabItemElement(tab, context = {}) {
     const item = document.createElement('div');
-    item.className = 'tab-item';
+    const isLive = Boolean(activeSession?.isLive);
+    const winIdx = context.winIndex !== undefined ? context.winIndex : 0;
+    const tabIdx = context.tabIndex !== undefined ? context.tabIndex : 0;
+    const tabKey = `win_${winIdx}_tab_${tabIdx}`;
+    const isSelected = selectedItems.tabs.has(tabKey) || selectedItems.windows.has(`win_${winIdx}`);
+
+    item.className = `tab-item ${isSelected ? 'is-selected' : ''}`;
 
     const domain = extractDomain(tab.url);
     const faviconUrl = tab.favIconUrl || (domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=32` : '');
@@ -1376,7 +1617,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     const pinnedBadge = tab.pinned ? '<span class="tab-badge pinned">📌 PIN</span>' : '';
     const activeBadge = tab.active ? '<span class="tab-badge active-badge">★ ACTIVE</span>' : '';
 
+    const tabCheckboxHtml = !isLive
+      ? `<label class="session-cb-label" title="Выбрать вкладку"><input type="checkbox" class="session-cb session-cb-tab" data-win-idx="${winIdx}" data-tab-idx="${tabIdx}" ${isSelected ? 'checked' : ''}></label>`
+      : '';
+
+    const tabDeleteBtnHtml = !isLive
+      ? `<button class="tab-hover-btn btn-delete-tab" data-win-idx="${winIdx}" data-tab-idx="${tabIdx}" title="Удалить эту вкладку из сохранённой сессии">🗑️</button>`
+      : '';
+
     item.innerHTML = `
+      ${tabCheckboxHtml}
       <div class="tab-favicon">${faviconHtml}</div>
       <div class="tab-details">
         <span class="tab-title">${highlightQuery(tab.title || tab.url || 'Новая вкладка', searchQuery)}</span>
@@ -1386,6 +1636,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         ${pinnedBadge}
         ${activeBadge}
         <button class="tab-hover-btn btn-copy-url" title="Скопировать ссылку">🔗</button>
+        ${tabDeleteBtnHtml}
       </div>
     `;
 
@@ -1398,12 +1649,52 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     }
 
+    // Tab checkbox change handler
+    const tabCb = item.querySelector('.session-cb-tab');
+    if (tabCb) {
+      tabCb.addEventListener('click', (e) => e.stopPropagation());
+      tabCb.addEventListener('change', (e) => {
+        e.stopPropagation();
+        const checked = tabCb.checked;
+        if (checked) {
+          selectedItems.tabs.add(tabKey);
+          item.classList.add('is-selected');
+        } else {
+          selectedItems.tabs.delete(tabKey);
+          item.classList.remove('is-selected');
+          if (context.groupId) {
+            selectedItems.groups.delete(`win_${winIdx}_grp_${context.groupId}`);
+            const parentGrpCb = item.closest('.tab-group-card')?.querySelector('.session-cb-group');
+            if (parentGrpCb) parentGrpCb.checked = false;
+          }
+          selectedItems.windows.delete(`win_${winIdx}`);
+          const parentWinCb = item.closest('.window-card')?.querySelector('.session-cb-window');
+          if (parentWinCb) {
+            parentWinCb.checked = false;
+          }
+        }
+
+        const winCard = item.closest('.window-card');
+        const totalTabsInWin = activeSession?.data?.[winIdx]?.tabs?.length || 0;
+        checkIfWholeWindowSelected(winIdx, totalTabsInWin, winCard);
+        updateBatchBar();
+      });
+    }
+
+    // Delete single tab button
+    const btnDelTab = item.querySelector('.btn-delete-tab');
+    if (btnDelTab) {
+      btnDelTab.addEventListener('click', (e) => {
+        e.stopPropagation();
+        hideTabHoverPreview(true);
+        deleteTabFromSession(winIdx, tabIdx);
+      });
+    }
+
     item.addEventListener('mouseenter', (e) => {
-      // If user is currently interacting with the open preview card, don't interrupt!
       if (isMouseOverCard) return;
 
       if (item === activePreviewItem) {
-        // Re-entered the current item from nearby, keep card open!
         if (hoverHideTimer) {
           clearTimeout(hoverHideTimer);
           hoverHideTimer = null;
@@ -1429,13 +1720,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         clearTimeout(hoverShowTimer);
         hoverShowTimer = null;
       }
-      // Start grace countdown so user can move into the card!
       hideTabHoverPreview(false);
     });
 
     // Click handler: Point opening (switches to tab if already open, otherwise opens directly in Chrome!)
     item.addEventListener('click', (e) => {
-      if (e.target.closest('.btn-copy-url')) return;
+      if (e.target.closest('.btn-copy-url') || e.target.closest('.btn-delete-tab') || e.target.closest('.session-cb-label')) return;
       if (!tab.url) return;
       openOrSwitchToTab(tab);
     });
@@ -1518,6 +1808,280 @@ document.addEventListener('DOMContentLoaded', async () => {
         showToast(`Ошибка восстановления группы: ${res?.error || ''}`);
       }
     });
+  }
+
+  // --- Saved Session In-Place Editing & Deletion Handlers ---
+
+  async function persistUpdatedSavedSession(updatedSession) {
+    if (!updatedSession || updatedSession.isLive) return;
+
+    // 1. Очищаем окна без вкладок
+    updatedSession.data = (updatedSession.data || []).filter(win => {
+      return Array.isArray(win.tabs) && win.tabs.length > 0;
+    });
+
+    // 2. Очищаем группы, в которых не осталось вкладок
+    for (const win of updatedSession.data) {
+      const validGroupIds = new Set(
+        (win.tabs || [])
+          .map(t => t.groupId)
+          .filter(gid => gid !== undefined && gid !== null && gid > 0)
+      );
+      win.groups = (win.groups || []).filter(g => validGroupIds.has(g.id));
+    }
+
+    // 3. Пересчитываем статистику
+    let tabCount = 0;
+    let groupCount = 0;
+    for (const win of updatedSession.data) {
+      tabCount += (win.tabs || []).length;
+      groupCount += (win.groups || []).length;
+    }
+    updatedSession.windowCount = updatedSession.data.length;
+    updatedSession.tabCount = tabCount;
+    updatedSession.groupCount = groupCount;
+
+    // 4. Если в сессии вообще не осталось окон/вкладок
+    if (updatedSession.windowCount === 0) {
+      const shouldDelete = confirm(`В сессии «${updatedSession.name}» не осталось окон и вкладок. Удалить эту сессию целиком?`);
+      if (shouldDelete) {
+        deleteSession(updatedSession);
+        return;
+      }
+    }
+
+    // 5. Записываем в chrome.storage.local
+    const stored = await chrome.storage.local.get(['saved_sessions']);
+    let list = Array.isArray(stored.saved_sessions) ? stored.saved_sessions : [];
+    const idx = list.findIndex(s => s.id === updatedSession.id);
+    if (idx !== -1) {
+      list[idx] = updatedSession;
+    } else {
+      list.unshift(updatedSession);
+    }
+    await chrome.storage.local.set({ saved_sessions: list });
+
+    // 6. Обновляем память
+    savedSessions = list;
+    if (activeSession && activeSession.id === updatedSession.id) {
+      activeSession = updatedSession;
+    }
+
+    // 7. Сбрасываем выделение и обновляем UI
+    clearSelection();
+    renderSidebarSessions();
+    renderActiveSessionDetails();
+  }
+
+  function deleteWindowFromSession(winIndex) {
+    if (!activeSession || activeSession.isLive) return;
+    if (!activeSession.data || !activeSession.data[winIndex]) return;
+
+    const winTitle = `Окно ${winIndex + 1}`;
+    const winTabsCount = (activeSession.data[winIndex].tabs || []).length;
+    if (!confirm(`Удалить ${winTitle} (${winTabsCount} вкл.) из сохранённой сессии?`)) {
+      return;
+    }
+
+    activeSession.data.splice(winIndex, 1);
+    showToast(`🗑️ ${winTitle} удалено из сессии.`);
+    persistUpdatedSavedSession(activeSession);
+  }
+
+  function deleteGroupFromSession(winIndex, groupId) {
+    if (!activeSession || activeSession.isLive) return;
+    const win = activeSession.data && activeSession.data[winIndex];
+    if (!win) return;
+
+    const grp = (win.groups || []).find(g => String(g.id) === String(groupId));
+    const grpTitle = grp ? grp.title || 'Без названия' : 'Группа';
+
+    if (!confirm(`Удалить группу «${grpTitle}» и все её вкладки из сохранённой сессии?`)) {
+      return;
+    }
+
+    win.tabs = (win.tabs || []).filter(t => String(t.groupId) !== String(groupId));
+    win.groups = (win.groups || []).filter(g => String(g.id) !== String(groupId));
+
+    showToast(`🗑️ Группа «${grpTitle}» удалена.`);
+    persistUpdatedSavedSession(activeSession);
+  }
+
+  function deleteTabFromSession(winIndex, tabIndex) {
+    if (!activeSession || activeSession.isLive) return;
+    const win = activeSession.data && activeSession.data[winIndex];
+    if (!win || !win.tabs || !win.tabs[tabIndex]) return;
+
+    const tab = win.tabs[tabIndex];
+    const tabTitle = tab.title || tab.url || 'Вкладка';
+
+    win.tabs.splice(tabIndex, 1);
+    showToast(`🗑️ Вкладка удалена: ${tabTitle.substring(0, 30)}...`);
+    persistUpdatedSavedSession(activeSession);
+  }
+
+  async function deleteSelectedItems() {
+    if (!activeSession || activeSession.isLive) {
+      showToast('Удаление доступно только для сохранённых сессий.');
+      return;
+    }
+
+    const winCount = selectedItems.windows.size;
+    const grpCount = selectedItems.groups.size;
+    const tabCount = selectedItems.tabs.size;
+
+    if (winCount === 0 && grpCount === 0 && tabCount === 0) {
+      showToast('Ничего не выбрано для удаления.');
+      return;
+    }
+
+    const parts = [];
+    if (winCount > 0) parts.push(`${winCount} ${getNoun(winCount, 'окно', 'окна', 'окон')}`);
+    if (grpCount > 0) parts.push(`${grpCount} ${getNoun(grpCount, 'группу', 'группы', 'групп')}`);
+    if (tabCount > 0) parts.push(`${tabCount} ${getNoun(tabCount, 'вкладку', 'вкладки', 'вкладок')}`);
+
+    const msg = `Удалить из сессии «${activeSession.name}» выбранное:\n• ${parts.join('\n• ')}?`;
+    if (!confirm(msg)) return;
+
+    const windows = activeSession.data || [];
+    const updatedWindows = [];
+
+    windows.forEach((win, winIdx) => {
+      // 1. Если окно выбрано целиком — удаляем всё окно
+      if (selectedItems.windows.has(`win_${winIdx}`)) {
+        return;
+      }
+
+      const winTabs = win.tabs || [];
+      const winGroups = win.groups || [];
+
+      // 2. Фильтруем вкладки
+      const remainingTabs = winTabs.filter((tab, tabIdx) => {
+        if (selectedItems.tabs.has(`win_${winIdx}_tab_${tabIdx}`)) {
+          return false;
+        }
+        if (tab.groupId && selectedItems.groups.has(`win_${winIdx}_grp_${tab.groupId}`)) {
+          return false;
+        }
+        return true;
+      });
+
+      // 3. Фильтруем группы
+      const remainingGroupIds = new Set(
+        remainingTabs.map(t => t.groupId).filter(gid => gid !== undefined && gid !== null && gid > 0)
+      );
+      const remainingGroups = winGroups.filter(g => {
+        if (selectedItems.groups.has(`win_${winIdx}_grp_${g.id}`)) return false;
+        return remainingGroupIds.has(g.id);
+      });
+
+      if (remainingTabs.length > 0) {
+        updatedWindows.push({
+          ...win,
+          tabs: remainingTabs,
+          groups: remainingGroups
+        });
+      }
+    });
+
+    activeSession.data = updatedWindows;
+    showToast(`🗑️ Выбранные элементы успешно удалены!`);
+    await persistUpdatedSavedSession(activeSession);
+  }
+
+  async function restoreSelectedItems() {
+    if (!activeSession) return;
+
+    const winCount = selectedItems.windows.size;
+    const grpCount = selectedItems.groups.size;
+    const tabCount = selectedItems.tabs.size;
+
+    if (winCount === 0 && grpCount === 0 && tabCount === 0) {
+      showToast('Ничего не выбрано для восстановления.');
+      return;
+    }
+
+    showToast('⚡ Восстановление выбранных окон и вкладок в Chrome...');
+
+    const windows = activeSession.data || [];
+
+    for (let winIdx = 0; winIdx < windows.length; winIdx++) {
+      const win = windows[winIdx];
+      const isWholeWinSelected = selectedItems.windows.has(`win_${winIdx}`);
+      const winTabs = win.tabs || [];
+      const winGroups = win.groups || [];
+
+      let tabsToRestore = [];
+      if (isWholeWinSelected) {
+        tabsToRestore = [...winTabs];
+      } else {
+        tabsToRestore = winTabs.filter((tab, tabIdx) => {
+          if (selectedItems.tabs.has(`win_${winIdx}_tab_${tabIdx}`)) return true;
+          if (tab.groupId && selectedItems.groups.has(`win_${winIdx}_grp_${tab.groupId}`)) return true;
+          return false;
+        });
+      }
+
+      if (tabsToRestore.length === 0) continue;
+
+      const firstTab = tabsToRestore[0];
+      let newWin;
+      try {
+        newWin = await chrome.windows.create({
+          url: sanitizeUrl(firstTab.url),
+          focused: true
+        });
+      } catch (e) {
+        newWin = await chrome.windows.create({ url: 'about:blank', focused: true });
+      }
+
+      const firstTabId = newWin.tabs && newWin.tabs[0] ? newWin.tabs[0].id : null;
+      if (firstTab.pinned && firstTabId) {
+        try { await chrome.tabs.update(firstTabId, { pinned: true }); } catch (e) {}
+      }
+
+      const createdRecords = [{ savedTab: firstTab, tabId: firstTabId }];
+
+      for (let i = 1; i < tabsToRestore.length; i++) {
+        const t = tabsToRestore[i];
+        try {
+          const crTab = await chrome.tabs.create({
+            windowId: newWin.id,
+            url: sanitizeUrl(t.url),
+            pinned: Boolean(t.pinned)
+          });
+          if (crTab) createdRecords.push({ savedTab: t, tabId: crTab.id });
+        } catch (err) {}
+      }
+
+      // Recreate groups
+      const relevantGroupIds = new Set(tabsToRestore.map(t => t.groupId).filter(Boolean));
+      for (const gDef of winGroups) {
+        if (!relevantGroupIds.has(gDef.id)) continue;
+        const tabIdsInGroup = createdRecords
+          .filter(rec => rec.tabId && String(rec.savedTab.groupId) === String(gDef.id) && !rec.savedTab.pinned)
+          .map(rec => rec.tabId);
+
+        if (tabIdsInGroup.length > 0) {
+          try {
+            const newGroupId = await chrome.tabs.group({
+              tabIds: tabIdsInGroup,
+              createProperties: { windowId: newWin.id }
+            });
+            const color = (gDef.color || 'grey').toLowerCase();
+            await chrome.tabGroups.update(newGroupId, {
+              title: gDef.title || '',
+              color: color,
+              collapsed: Boolean(gDef.collapsed)
+            });
+          } catch (grpErr) {}
+        }
+      }
+    }
+
+    showToast('✨ Выбранные элементы успешно восстановлены в Chrome!');
+    fetchLiveSession();
+    clearSelection();
   }
 
   // --- Export & Delete Handlers ---
@@ -1693,6 +2257,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnDeleteCurrent.addEventListener('click', () => {
     deleteSession(activeSession);
   });
+
+  // --- Floating Batch Action Bar Button Listeners ---
+  if (btnBatchDelete) {
+    btnBatchDelete.addEventListener('click', () => {
+      deleteSelectedItems();
+    });
+  }
+
+  if (btnBatchRestore) {
+    btnBatchRestore.addEventListener('click', () => {
+      restoreSelectedItems();
+    });
+  }
+
+  if (btnBatchClear) {
+    btnBatchClear.addEventListener('click', () => {
+      clearSelection();
+    });
+  }
 
   btnRefreshLive.addEventListener('click', async () => {
     btnRefreshLive.style.transform = 'rotate(360deg)';

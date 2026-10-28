@@ -175,6 +175,30 @@
       <div id="sessionContent" class="session-content">
         <!-- Rendered dynamically: Window cards with colored Chrome Tab Groups and tabs -->
       </div>
+
+      <!-- Floating Batch Actions Bar (Glassmorphism & Neon Glow) -->
+      <div id="batchActionBar" class="batch-action-bar hidden">
+        <div class="batch-bar-left">
+          <div class="batch-indicator">
+            <span class="batch-check-icon">✓</span>
+          </div>
+          <div class="batch-info-text">
+            <span id="batchSelectedSummary" class="batch-summary">Выбрано: 0 элементов</span>
+            <span class="batch-hint">Действия применятся к выбранным окнам и вкладкам</span>
+          </div>
+        </div>
+        <div class="batch-bar-actions">
+          <button id="btnBatchRestore" class="btn btn-primary btn-glow" type="button" title="Восстановить только выбранные окна/вкладки в Chrome">
+            <span>⚡</span> Восстановить выбранное
+          </button>
+          <button id="btnBatchDelete" class="btn btn-danger btn-glow-danger" type="button" title="Удалить выбранные элементы из сохранённой сессии">
+            <span>🗑️</span> Удалить выбранное
+          </button>
+          <button id="btnBatchClear" class="btn btn-secondary btn-icon" type="button" title="Снять выделение">
+            <span>✕</span>
+          </button>
+        </div>
+      </div>
     </main>
   </div>
 

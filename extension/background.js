@@ -449,6 +449,23 @@ async function renameSession(sessionId, newName) {
   return { success: true, session: session };
 }
 
+// 4.2. Update Existing Session (windows, groups, tabs)
+async function updateSession(sessionObj) {
+  if (!sessionObj || !sessionObj.id) {
+    throw new Error('Некорректные данные сессии для обновления.');
+  }
+  const stored = await chrome.storage.local.get(['saved_sessions']);
+  const list = Array.isArray(stored.saved_sessions) ? stored.saved_sessions : [];
+  const idx = list.findIndex(s => s.id === sessionObj.id);
+  if (idx !== -1) {
+    list[idx] = sessionObj;
+  } else {
+    list.unshift(sessionObj);
+  }
+  await chrome.storage.local.set({ saved_sessions: list });
+  return { success: true, session: sessionObj };
+}
+
 // 5. Restore Session, Single Window, or Single Group
 async function restoreSession(sessionId, targetGroupId = null, options = {}) {
   const stored = await chrome.storage.local.get(['saved_sessions']);
@@ -1090,6 +1107,11 @@ async function executeAgentCommand(action, params) {
       return await renameSession(sId, newName);
     }
 
+    case 'update_session': {
+      const sessionObj = params.session || params;
+      return await updateSession(sessionObj);
+    }
+
     case 'import_session_json': {
       const raw = params.session || params.sessionData || params.data || params.json || params;
       return await importSessionJson(raw);
@@ -1122,7 +1144,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'get_tabs', 'close_duplicate_tabs', 'close_tabs', 'ungroup_all_tabs',
     'apply_layout', 'activate_tab', 'create_tab',
     'get_live_session', 'open_manager',
-    'save_session', 'list_sessions', 'restore_session', 'export_session_json', 'delete_session', 'rename_session', 'import_session_json',
+    'save_session', 'list_sessions', 'restore_session', 'export_session_json', 'delete_session', 'rename_session', 'update_session', 'import_session_json',
     'youtube_watch_later'
   ];
 
