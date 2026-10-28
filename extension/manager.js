@@ -1102,10 +1102,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     let mediaHtml = '';
     let headerHtml = '';
-    let openBtnText = '<span>🌐</span> Открыть вкладку';
+    let openBtnText = '<span>🌐</span> Открыть';
 
     if (ytVideoId) {
-      openBtnText = '<span>▶</span> Смотреть видео';
+      openBtnText = '<span>▶</span> Смотреть';
       const posterUrl = `https://img.youtube.com/vi/${ytVideoId}/mqdefault.jpg`;
       mediaHtml = `
         <div class="hover-preview-media" title="Кликните, чтобы открыть видео в Chrome">
@@ -1149,16 +1149,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         </div>
       </div>
       <div class="hover-preview-footer">
-        <button class="btn-preview-open" type="button" title="Открыть в Chrome">
+        <button class="btn-preview-open" type="button" title="${ytVideoId ? 'Смотреть видео на YouTube' : 'Открыть вкладку в Chrome'}">
           ${openBtnText}
         </button>
         ${ytVideoId ? `
           <button class="btn-preview-watch-later" type="button" title="Добавить в плейлист «Смотреть позже» вашего YouTube-аккаунта">
-            <span>⏱️</span> В «Смотреть позже»
+            <span>⏱️</span> В «Позже»
           </button>
         ` : ''}
-        <button class="btn-preview-copy" type="button" title="Скопировать ссылку в буфер">
-          <span>🔗</span> Скопировать ссылку
+        <button class="btn-preview-copy" type="button" title="Скопировать ссылку в буфер обмена">
+          <span>🔗</span> Копировать
         </button>
       </div>
     `;
@@ -1211,46 +1211,58 @@ document.addEventListener('DOMContentLoaded', async () => {
         e.stopPropagation();
         const origHtml = btnWatchLater.innerHTML;
         btnWatchLater.disabled = true;
-        btnWatchLater.innerHTML = '<span>⏳</span> Добавляем...';
+        btnWatchLater.innerHTML = '<span>⏳</span> В «Позже»...';
 
         chrome.runtime.sendMessage({
           action: 'youtube_watch_later',
-          params: { videoId: ytVideoId }
+          params: {
+            videoId: ytVideoId,
+            tabId: typeof tab.id === 'number' ? tab.id : null,
+            tabUrl: tab.url
+          }
         }, (res) => {
           if (res && res.success) {
-            btnWatchLater.innerHTML = '<span>✓</span> В «Смотреть позже»!';
-            btnWatchLater.classList.add('success-glow');
-            showToast(`✓ Добавлено в «Смотреть позже» на вашем YouTube!`, 3500);
+            if (res.alreadyAdded) {
+              btnWatchLater.innerHTML = '<span>✓</span> Уже в «Позже»';
+              btnWatchLater.classList.add('success-glow');
+              showToast('✓ Это видео уже находится в «Смотреть позже»!', 3500);
+            } else {
+              btnWatchLater.innerHTML = '<span>✓</span> В «Позже»!';
+              btnWatchLater.classList.add('success-glow');
+              showToast('✓ Добавлено в «Смотреть позже» на вашем YouTube!', 3500);
+            }
           } else {
             btnWatchLater.disabled = false;
             btnWatchLater.innerHTML = origHtml;
             const err = res?.error || 'Не удалось добавить видео в YouTube';
-            showToast(`⚠️ ${err}`, 4500);
+            showToast(`⚠️ ${err}`, 5000);
           }
         });
       });
     }
 
     const btnCopy = tabHoverPreview.querySelector('.btn-preview-copy');
-    btnCopy.addEventListener('click', (e) => {
-      e.stopPropagation();
-      navigator.clipboard.writeText(tab.url);
-      btnCopy.innerHTML = '<span>✓</span> Ссылка скопирована!';
-      btnCopy.style.borderColor = 'var(--cyan-neon)';
-      btnCopy.style.color = '#fff';
-      showToast('URL скопирован в буфер обмена!');
-      setTimeout(() => {
-        if (btnCopy) {
-          btnCopy.innerHTML = '<span>🔗</span> Скопировать ссылку';
-          btnCopy.style.borderColor = '';
-          btnCopy.style.color = '';
-        }
-      }, 1500);
-    });
+    if (btnCopy) {
+      btnCopy.addEventListener('click', (e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(tab.url);
+        btnCopy.innerHTML = '<span>✓</span> Скопировано!';
+        btnCopy.style.borderColor = 'var(--cyan-neon)';
+        btnCopy.style.color = '#fff';
+        showToast('URL скопирован в буфер обмена!');
+        setTimeout(() => {
+          if (btnCopy) {
+            btnCopy.innerHTML = '<span>🔗</span> Копировать';
+            btnCopy.style.borderColor = '';
+            btnCopy.style.color = '';
+          }
+        }, 1500);
+      });
+    }
 
     // Positioning anchored directly to the tab item row
     const itemRect = itemEl ? itemEl.getBoundingClientRect() : { left: 100, right: 300, top: 100, bottom: 140 };
-    const cardWidth = 380;
+    const cardWidth = 410;
     const cardPadding = 16;
 
     // Horizontal: align slightly indented from tab start, clamped to window bounds
