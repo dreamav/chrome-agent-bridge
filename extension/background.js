@@ -745,237 +745,154 @@ async function addVideoToYouTubeWatchLater(videoId, preferredTabId) {
              || ytTabs[0];
   }
 
-  // Strategy 1: In-Tab Execution in YouTube's MAIN world
-  if (targetTab && targetTab.id) {
+  let createdTempTab = false;
+  if (!targetTab) {
+    // If no YouTube tab is open, open a lightweight background tab to access YouTube origin
     try {
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: targetTab.id },
-        world: 'MAIN',
-        func: async (vId) => {
-          try {
-            const ytcfg = window.ytcfg;
-            const apiKey = (ytcfg && typeof ytcfg.get === 'function') ? (ytcfg.get('INNERTUBE_API_KEY') || '') : '';
-            const context = (ytcfg && typeof ytcfg.get === 'function') ? ytcfg.get('INNERTUBE_CONTEXT') : null;
+      targetTab = await chrome.tabs.create({ url: 'https://www.youtube.com/robots.txt', active: false });
+      createdTempTab = true;
+      await new Promise(r => setTimeout(r, 600));
+    } catch (createErr) {
+      console.warn('Could not create temp YouTube tab:', createErr);
+    }
+  }
 
-            // Extract SAPISID or __Secure-3PAPISID from document.cookie
-            let sapisid = '';
-            const cookieMatch = document.cookie.match(/(?:^|;\s*)(?:__Secure-3P|__Secure-1P)?SAPISID=([^;]+)/);
-            if (cookieMatch) {
-              sapisid = cookieMatch[1];
+  if (!targetTab || !targetTab.id) {
+    throw new Error('Не удалось найти или открыть вкладку YouTube для авторизованного запроса.');
+  }
+
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: targetTab.id },
+      world: 'MAIN',
+      func: async (vId) => {
+        try {
+          // 1. Extract SAPISID or __Secure-3PAPISID from document.cookie
+          function getSapisid() {
+            const match = document.cookie.match(/(?:^|;\s*)(?:__Secure-3P|__Secure-1P)?SAPISID=([^;]+)/);
+            if (match) return match[1];
+            const cookies = document.cookie.split('; ');
+            for (const c of cookies) {
+              if (c.startsWith('SAPISID=')) return c.substring(8);
+              if (c.startsWith('__Secure-3PAPISID=')) return c.substring(18);
             }
+            return null;
+          }
 
-            // Generate SAPISIDHASH signature
-            let authHeader = '';
-            if (sapisid) {
-              const timestamp = Math.floor(Date.now() / 1000);
-              const origin = window.location.origin || 'https://www.youtube.com';
-              const payload = `${timestamp} ${sapisid} ${origin}`;
-              const encoder = new TextEncoder();
-              const hashBuffer = await crypto.subtle.digest('SHA-1', encoder.encode(payload));
-              const hex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-              authHeader = `SAPISIDHASH ${timestamp}_${hex}`;
-            }
-
-            const clientVersion = (context && context.client && context.client.clientVersion) || '2.20261025.01.00';
-            const sessionIndex = (ytcfg && typeof ytcfg.get === 'function' ? ytcfg.get('SESSION_INDEX') : '0') || '0';
-
-            const headers = {
-              'Content-Type': 'application/json',
-              'X-Origin': window.location.origin || 'https://www.youtube.com',
-              'X-YouTube-Client-Name': '1',
-              'X-YouTube-Client-Version': clientVersion,
-              'X-Goog-AuthUser': String(sessionIndex)
-            };
-            if (authHeader) {
-              headers['Authorization'] = authHeader;
-            }
-
-            const endpoint = apiKey
-              ? `https://www.youtube.com/youtubei/v1/browse/edit_playlist?key=${apiKey}&prettyPrint=false`
-              : `https://www.youtube.com/youtubei/v1/browse/edit_playlist?prettyPrint=false`;
-
-            const res = await fetch(endpoint, {
-              method: 'POST',
-              headers: headers,
-              credentials: 'include',
-              body: JSON.stringify({
-                context: context || {
-                  client: {
-                    clientName: 'WEB',
-                    clientVersion: clientVersion,
-                    hl: 'ru',
-                    gl: 'RU'
-                  }
-                },
-                playlistId: 'WL',
-                actions: [{ action: 'ACTION_ADD_VIDEO', addedVideoId: vId }]
-              })
-            });
-
-            if (!res.ok) {
-              return { success: false, status: res.status, error: `HTTP ${res.status}: ${res.statusText}` };
-            }
-
-            const data = await res.json();
-            
-            // STRICT verification: YouTube returns status: "STATUS_SUCCEEDED"
-            if (data && data.status === 'STATUS_SUCCEEDED') {
-              return { success: true, status: 'STATUS_SUCCEEDED', data };
-            }
-
-            // Extract error/alert message from YouTube response
-            let alertMsg = '';
-            if (data && data.alerts && Array.isArray(data.alerts)) {
-              for (const a of data.alerts) {
-                const text = a?.alertRenderer?.text?.runs?.map(r => r.text).join('') || a?.alertRenderer?.text?.simpleText;
-                if (text) { alertMsg = text; break; }
-              }
-            } else if (data && data.error && data.error.message) {
-              alertMsg = data.error.message;
-            }
-
-            // If already in playlist, treat as success with alreadyAdded flag
-            const isAlreadyAdded = alertMsg && (
-              alertMsg.toLowerCase().includes('уже есть') || 
-              alertMsg.toLowerCase().includes('already in') ||
-              alertMsg.toLowerCase().includes('already added')
-            );
-            if (isAlreadyAdded) {
-              return { success: true, alreadyAdded: true, status: 'ALREADY_IN_PLAYLIST' };
-            }
-
+          const sapisid = getSapisid();
+          if (!sapisid) {
             return {
               success: false,
-              status: data?.status || 'STATUS_FAILED',
-              error: alertMsg || `YouTube отклонил добавление (статус: ${data?.status || 'STATUS_FAILED'})`
+              error: 'Вы не авторизованы на YouTube. Войдите в свой аккаунт на youtube.com.'
             };
-          } catch (e) {
-            return { success: false, error: e.message };
           }
-        },
-        args: [cleanVideoId]
-      });
 
-      if (results && results[0] && results[0].result) {
-        const r = results[0].result;
-        if (r.success) {
-          return { success: true, videoId: cleanVideoId, alreadyAdded: !!r.alreadyAdded, method: 'in_tab_innertube' };
-        } else if (r.error) {
-          console.warn('In-tab InnerTube reported error:', r.error);
-          throw new Error(r.error);
+          // 2. Compute SAPISIDHASH (Date.now() in milliseconds!)
+          async function sha1(str) {
+            const buffer = new TextEncoder().encode(str);
+            const hashBuffer = await window.crypto.subtle.digest('SHA-1', buffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => ('00' + b.toString(16)).slice(-2)).join('');
+          }
+
+          const timestamp = Date.now();
+          const origin = window.location.origin || 'https://www.youtube.com';
+          const digest = await sha1(`${timestamp} ${sapisid} ${origin}`);
+          const sapisidhash = `${timestamp}_${digest}`;
+
+          // 3. Client version from ytcfg
+          const clientVersion = window.ytcfg?.data_?.INNERTUBE_CLIENT_VERSION 
+                             || (typeof window.ytcfg?.get === 'function' && window.ytcfg.get('INNERTUBE_CLIENT_VERSION'))
+                             || '2.20261025.01.00';
+
+          // 4. Send InnerTube browse/edit_playlist request
+          const endpoint = 'https://www.youtube.com/youtubei/v1/browse/edit_playlist';
+          const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `SAPISIDHASH ${sapisidhash}`
+            },
+            credentials: 'include',
+            body: JSON.stringify({
+              context: {
+                client: {
+                  clientName: 'WEB',
+                  clientVersion: clientVersion
+                }
+              },
+              actions: [
+                {
+                  addedVideoId: vId,
+                  action: 'ACTION_ADD_VIDEO'
+                }
+              ],
+              playlistId: 'WL'
+            })
+          });
+
+          if (!res.ok) {
+            return { success: false, status: res.status, error: `HTTP ${res.status}: ${res.statusText}` };
+          }
+
+          const data = await res.json();
+
+          if (data && data.status === 'STATUS_SUCCEEDED') {
+            return { success: true, status: 'STATUS_SUCCEEDED', data };
+          }
+
+          // Extract error/alert message
+          let alertMsg = '';
+          if (data && data.alerts && Array.isArray(data.alerts)) {
+            for (const a of data.alerts) {
+              const text = a?.alertRenderer?.text?.runs?.map(r => r.text).join('') || a?.alertRenderer?.text?.simpleText;
+              if (text) { alertMsg = text; break; }
+            }
+          } else if (data && data.error && data.error.message) {
+            alertMsg = data.error.message;
+          }
+
+          const isAlreadyAdded = alertMsg && (
+            alertMsg.toLowerCase().includes('уже есть') || 
+            alertMsg.toLowerCase().includes('already in') ||
+            alertMsg.toLowerCase().includes('already added')
+          );
+          if (isAlreadyAdded) {
+            return { success: true, alreadyAdded: true, status: 'ALREADY_IN_PLAYLIST' };
+          }
+
+          return {
+            success: false,
+            status: data?.status || 'STATUS_FAILED',
+            error: alertMsg || `YouTube отклонил добавление (статус: ${data?.status || 'STATUS_FAILED'})`
+          };
+        } catch (e) {
+          return { success: false, error: e.message };
         }
-      }
-    } catch (tabErr) {
-      console.warn('In-tab execution error:', tabErr);
-      if (tabErr.message && !tabErr.message.includes('Cannot access')) {
-        throw tabErr;
-      }
-    }
-  }
-
-  // Strategy 2: Direct InnerTube request from background using chrome.cookies & scraped API key
-  try {
-    const allCookies = await chrome.cookies.getAll({ name: 'SAPISID' });
-    let sapisidCookie = allCookies.find(c => c.domain.includes('youtube.com')) 
-                     || allCookies.find(c => c.domain.includes('google.com'))
-                     || allCookies[0];
-    let sapisid = sapisidCookie?.value || '';
-
-    if (!sapisid) {
-      const secureCookies = await chrome.cookies.getAll({ name: '__Secure-3PAPISID' });
-      const sec = secureCookies.find(c => c.domain.includes('youtube.com')) 
-               || secureCookies.find(c => c.domain.includes('google.com'))
-               || secureCookies[0];
-      sapisid = sec?.value || '';
-    }
-
-    if (!sapisid) {
-      throw new Error('Авторизация YouTube не найдена в Chrome. Пожалуйста, откройте youtube.com и войдите в свой аккаунт.');
-    }
-
-    const timestamp = Math.floor(Date.now() / 1000);
-    const origin = 'https://www.youtube.com';
-    const payload = `${timestamp} ${sapisid} ${origin}`;
-    const encoder = new TextEncoder();
-    const hashBuffer = await crypto.subtle.digest('SHA-1', encoder.encode(payload));
-    const hex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-    const sapisidHash = `${timestamp}_${hex}`;
-
-    // Get API Key from YouTube
-    let apiKey = '';
-    try {
-      const pageRes = await fetch('https://www.youtube.com', { credentials: 'include' });
-      const html = await pageRes.text();
-      const m = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/);
-      if (m) apiKey = m[1];
-    } catch (e) {
-      console.warn('Could not scrape INNERTUBE_API_KEY in background:', e);
-    }
-
-    const endpoint = apiKey
-      ? `https://www.youtube.com/youtubei/v1/browse/edit_playlist?key=${apiKey}&prettyPrint=false`
-      : `https://www.youtube.com/youtubei/v1/browse/edit_playlist?prettyPrint=false`;
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'X-Origin': 'https://www.youtube.com',
-      'X-YouTube-Client-Name': '1',
-      'X-YouTube-Client-Version': '2.20261025.01.00',
-      'X-Goog-AuthUser': '0',
-      'Authorization': `SAPISIDHASH ${sapisidHash}`
-    };
-
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: headers,
-      credentials: 'include',
-      body: JSON.stringify({
-        context: {
-          client: {
-            clientName: 'WEB',
-            clientVersion: '2.20261025.01.00',
-            hl: 'ru',
-            gl: 'RU'
-          }
-        },
-        playlistId: 'WL',
-        actions: [{ action: 'ACTION_ADD_VIDEO', addedVideoId: cleanVideoId }]
-      })
+      },
+      args: [cleanVideoId]
     });
 
-    if (res.ok) {
-      const json = await res.json();
-      if (json && json.status === 'STATUS_SUCCEEDED') {
-        return { success: true, videoId: cleanVideoId, method: 'direct_innertube' };
+    if (results && results[0] && results[0].result) {
+      const r = results[0].result;
+      if (r.success) {
+        return { success: true, videoId: cleanVideoId, alreadyAdded: !!r.alreadyAdded, method: 'in_tab_innertube' };
       }
-
-      let alertMsg = '';
-      if (json && json.alerts && Array.isArray(json.alerts)) {
-        for (const a of json.alerts) {
-          const text = a?.alertRenderer?.text?.runs?.map(r => r.text).join('') || a?.alertRenderer?.text?.simpleText;
-          if (text) { alertMsg = text; break; }
-        }
-      } else if (json && json.error && json.error.message) {
-        alertMsg = json.error.message;
+      if (r.error) {
+        throw new Error(r.error);
       }
-
-      const isAlreadyAdded = alertMsg && (
-        alertMsg.toLowerCase().includes('уже есть') || 
-        alertMsg.toLowerCase().includes('already in') ||
-        alertMsg.toLowerCase().includes('already added')
-      );
-      if (isAlreadyAdded) {
-        return { success: true, alreadyAdded: true, status: 'ALREADY_IN_PLAYLIST' };
-      }
-
-      if (alertMsg) throw new Error(alertMsg);
     }
-  } catch (bgErr) {
-    console.warn('Direct background InnerTube fetch failed:', bgErr);
-    throw bgErr;
-  }
 
-  throw new Error('Не удалось добавить видео в «Смотреть позже». Убедитесь, что вы авторизованы на youtube.com.');
+    throw new Error('Не получен ответ от вкладки YouTube.');
+  } finally {
+    if (createdTempTab && targetTab && targetTab.id) {
+      try {
+        await chrome.tabs.remove(targetTab.id);
+      } catch (e) {
+        // Ignore
+      }
+    }
+  }
 }
 
 /**
