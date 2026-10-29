@@ -185,12 +185,50 @@ async function addVideoToYouTubeWatchLater(videoId, preferredTabId) {
           // Attempt to extract active channel/profile title
           function getActiveAccountTitle() {
             try {
+              // 1. Check ytcfg configuration
+              const cfgName = getYtCfg('USER_DISPLAY_NAME') 
+                           || getYtCfg('USER_NAME') 
+                           || getYtCfg('CHANNEL_TITLE')
+                           || getYtCfg('INNERTUBE_CONTEXT')?.user?.displayName;
+              if (cfgName && typeof cfgName === 'string' && cfgName.trim().length > 0) {
+                return cfgName.trim();
+              }
+
+              // 2. Check avatar button aria-label / title
+              const avatarBtn = document.querySelector('button#avatar-btn, ytd-topbar-menu-button-renderer button');
+              const ariaLabel = avatarBtn?.getAttribute('aria-label') || avatarBtn?.title || '';
+              if (ariaLabel) {
+                const match = ariaLabel.match(/(?:Аккаунт Google|Google Account|Аккаунт|Account)?\s*(?::\s*)?([^\n(]+)/i);
+                if (match && match[1]) {
+                  const cleaned = match[1].replace(/^(?:Аватар профиля|Аватар пользователя|Avatar image|Profile photo)(?::|\s*[-–—]\s*)?\s*/i, '').trim();
+                  if (cleaned && cleaned.length > 0 && cleaned.length < 50 && !/^(?:аккаунт|account|аватар|avatar)$/i.test(cleaned)) {
+                    return cleaned;
+                  }
+                }
+              }
+
+              // 3. Check avatar img alt attribute
               const avatarImg = document.querySelector('button#avatar-btn img, yt-img-shadow#avatar img');
               if (avatarImg && avatarImg.alt) {
                 const clean = avatarImg.alt
                   .replace(/^(?:Аватар профиля|Аватар пользователя|Аватарка|Avatar image|Profile photo)(?::|\s*[-–—]\s*)?\s*/i, '')
                   .trim();
-                if (clean && clean.length > 0 && clean.length < 50) return clean;
+                if (clean && clean.length > 0 && clean.length < 50 && !/^(?:аккаунт|account|аватар|avatar)$/i.test(clean)) {
+                  return clean;
+                }
+              }
+
+              // 4. Check "You" / channel link in guide sidebar (e.g. href="/@relovedv")
+              const guideChannelLink = document.querySelector('ytd-guide-section-renderer a[href*="/@"], a#endpoint[href*="/@"]');
+              if (guideChannelLink) {
+                const handleMatch = (guideChannelLink.getAttribute('href') || '').match(/@([a-zA-Z0-9_.-]+)/);
+                if (handleMatch && handleMatch[1]) {
+                  return handleMatch[1];
+                }
+                const text = guideChannelLink.textContent?.trim();
+                if (text && text.length > 0 && text.length < 40 && text.toLowerCase() !== 'вы' && text.toLowerCase() !== 'you') {
+                  return text;
+                }
               }
             } catch (e) {}
             return fallbackAuth?.accountTitle || null;
