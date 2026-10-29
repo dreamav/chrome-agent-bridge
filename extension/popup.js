@@ -11,9 +11,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const viewSessions = document.getElementById('viewSessions');
   const sessionsCountBadge = document.getElementById('sessionsCountBadge');
 
-  // Header & metric elements
-  const statusBadge = document.getElementById('statusBadge');
-  const statusText = document.getElementById('statusText');
+  // Metric elements & toast
   const tabCountElem = document.getElementById('tabCount');
   const toastMessage = document.getElementById('toastMessage');
 
@@ -64,9 +62,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function renderStatus(tabCount) {
-    statusBadge.classList.add('connected');
-    statusText.textContent = 'Автономный 🟢';
-    if (typeof tabCount === 'number') {
+    if (typeof tabCount === 'number' && tabCountElem) {
       tabCountElem.textContent = tabCount;
     }
   }
