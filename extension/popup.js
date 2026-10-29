@@ -21,7 +21,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnRefresh = document.getElementById('btnRefresh');
   const btnDedupe = document.getElementById('btnDedupe');
   const btnUngroup = document.getElementById('btnUngroup');
-  const btnSmart = document.getElementById('btnSmart');
 
   // Session elements
   const sessionNameInput = document.getElementById('sessionNameInput');
@@ -64,14 +63,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     return `Сессия ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
-  function renderStatus(connected, tabCount) {
-    if (connected) {
-      statusBadge.classList.add('connected');
-      statusText.textContent = 'Connected 🟢';
-    } else {
-      statusBadge.classList.remove('connected');
-      statusText.textContent = 'Offline 🔴';
-    }
+  function renderStatus(tabCount) {
+    statusBadge.classList.add('connected');
+    statusText.textContent = 'Автономный 🟢';
     if (typeof tabCount === 'number') {
       tabCountElem.textContent = tabCount;
     }
@@ -82,17 +76,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       const tabs = await chrome.tabs.query({});
       const count = tabs.length;
-      tabCountElem.textContent = count;
-
-      chrome.runtime.sendMessage({ action: 'get_status' }, (response) => {
-        if (chrome.runtime.lastError || !response) {
-          chrome.storage.local.get(['bridge_connected'], (data) => {
-            renderStatus(Boolean(data && data.bridge_connected), count);
-          });
-        } else {
-          renderStatus(Boolean(response.connected), response.tab_count || count);
-        }
-      });
+      renderStatus(count);
 
       if (showNotification) {
         showToast(`Вкладок: ${count} → Список обновлен`);
@@ -193,72 +177,6 @@ document.addEventListener('DOMContentLoaded', async () => {
           showToast('Ошибка при разгруппировке →');
         }
         await refreshTabs(false);
-      });
-    });
-  }
-
-  if (btnSmart) {
-    btnSmart.addEventListener('click', async () => {
-      btnSmart.disabled = true;
-      btnSmart.textContent = 'Организация...';
-
-      chrome.runtime.sendMessage({ action: 'get_tabs' }, async (tabs) => {
-        if (!tabs || !Array.isArray(tabs) || tabs.length === 0) {
-          showToast('Нет открытых вкладок →');
-          btnSmart.disabled = false;
-          btnSmart.textContent = 'Умная организация (AI) →';
-          return;
-        }
-
-        const groups = {
-          AI: [],
-          SERVICES: [],
-          AUTO: [],
-          CAREER: [],
-          MEDIA: [],
-          OTHER: []
-        };
-
-        for (const t of tabs) {
-          const text = `${t.url || ''} ${t.title || ''}`.toLowerCase();
-
-          if (['вайбкодинг', 'заказ', 'клиент', 'фриланс', 'джун', 'стажер', 'работу в it', 'web3', 'нейронайм', 'портфолио'].some(k => text.includes(k))) {
-            groups.CAREER.push(t.id);
-          } else if (['grok', 'x.ai', 'claude', 'notebooklm', 'antigravity', 'qwen', 'chatgpt', 'gemini', 'deepseek', 'llm', 'blender', 'three.js', 'threejs', 'awwwards', 'layers.to', 'bentogrids', 'minimal.gallery', 'recent.design'].some(k => text.includes(k))) {
-            groups.AI.push(t.id);
-          } else if (['vin', 'vininspector', 'alshnedauto', 'partsgiant', 'partsdeal', 'subaru', 'mopar', 'infiniti', 'mercedes', 'ford', 'nhtsa', 'motorhome', 'chassis', 'автозапчаст'].some(k => text.includes(k))) {
-            groups.AUTO.push(t.id);
-          } else if (['whatsapp', 'mail.google', 'gmail', 'fastpanel', ':8888', 'digitalocean', 'cloudways', 'paypal', 'cloud.google', 'extensions'].some(k => text.includes(k))) {
-            groups.SERVICES.push(t.id);
-          } else if (['kinect', 'pegasus', 'transformers', 'beast wars', 'пустоши', 'japan got talent', 'reels', 'instagram', 'standup', 'музыка', 'юмор', 'youtube.com', 'youtu.be'].some(k => text.includes(k))) {
-            groups.MEDIA.push(t.id);
-          } else {
-            groups.OTHER.push(t.id);
-          }
-        }
-
-        const layoutPlan = [];
-        if (groups.AI.length > 0) layoutPlan.push({ title: 'ИИ & Нейросети', color: 'purple', tab_ids: groups.AI, window_id: 1 });
-        if (groups.SERVICES.length > 0) layoutPlan.push({ title: 'Общение & Сервер', color: 'green', tab_ids: groups.SERVICES, window_id: 1 });
-        if (groups.AUTO.length > 0) layoutPlan.push({ title: 'Vincode & Авто', color: 'cyan', tab_ids: groups.AUTO, window_id: 2 });
-        if (groups.CAREER.length > 0) layoutPlan.push({ title: 'Вайбкодинг & Карьера', color: 'blue', tab_ids: groups.CAREER, window_id: 3 });
-        if (groups.MEDIA.length > 0) layoutPlan.push({ title: 'Отдых, Спорт & Музыка', color: 'red', tab_ids: groups.MEDIA, window_id: 3 });
-        if (groups.OTHER.length > 0) layoutPlan.push({ title: 'Прочее & Поиск', color: 'grey', tab_ids: groups.OTHER, window_id: 3 });
-
-        chrome.runtime.sendMessage({
-          action: 'apply_layout',
-          params: { groups: layoutPlan, close_empty_windows: true }
-        }, async (res) => {
-          btnSmart.disabled = false;
-          btnSmart.textContent = 'Умная организация (AI) →';
-
-          if (res && res.success) {
-            showToast(`Организовано окон: ${res.result.windows_count} →`);
-          } else {
-            showToast('Ошибка организации →');
-          }
-          await refreshTabs(false);
-        });
       });
     });
   }

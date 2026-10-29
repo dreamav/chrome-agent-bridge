@@ -5,8 +5,6 @@
 
 document.addEventListener('DOMContentLoaded', async () => {
   // --- DOM Elements ---
-  const wsStatusBadge = document.getElementById('wsStatusBadge');
-  const wsStatusText = document.getElementById('wsStatusText');
   const searchInput = document.getElementById('searchInput');
   const btnClearSearch = document.getElementById('btnClearSearch');
   const btnSaveCurrent = document.getElementById('btnSaveCurrent');
@@ -234,18 +232,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  // --- Status & Data Fetching ---
-  async function checkWsStatus() {
-    chrome.runtime.sendMessage({ action: 'get_status' }, (res) => {
-      if (res && res.connected) {
-        wsStatusBadge.classList.add('connected');
-        wsStatusText.textContent = 'Connected';
-      } else {
-        wsStatusBadge.classList.remove('connected');
-        wsStatusText.textContent = 'Offline';
-      }
-    });
-  }
+  // --- Data Fetching ---
 
   async function fetchLiveSession() {
     return new Promise((resolve) => {
@@ -2643,7 +2630,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // --- Initial Bootstrap ---
-  checkWsStatus();
   await fetchLiveSession();
   await fetchSavedSessions();
 

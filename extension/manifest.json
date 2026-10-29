@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Chrome Agent Bridge",
-  "version": "1.3.0",
-  "description": "Ультра-легковесный локальный мост между Google Chrome и AI-агентами (0% CPU)",
+  "version": "1.4.0",
+  "description": "Автономный менеджер сессий и групп вкладок Google Chrome (0% CPU, Session Buddy style)",
   "permissions": [
     "tabs",
     "tabGroups",

@@ -1,134 +1,19 @@
 /**
  * Chrome Agent Bridge - Background Service Worker (Manifest V3)
- * Pure Executor ("Hands") - Minimalist, Event-Driven Chrome API Bridge.
- * 0% CPU footprint when idle.
+ * Pure Offline & Autonomous Session Manager (0% CPU footprint when idle).
  */
 
-const WS_URL = 'ws://127.0.0.1:8765';
-const RECONNECT_DELAY_MS = 5000;
-const PING_INTERVAL_MS = 25000;
-
-let socket = null;
-let reconnectTimer = null;
-let pingInterval = null;
-let isConnected = false;
-
-// Update connection status in chrome.storage for popup UI
-async function updateStatus(connected) {
-  isConnected = connected;
+// Update tab count in chrome.storage for popup UI
+async function updateTabCount() {
   try {
     const tabs = await chrome.tabs.query({});
     await chrome.storage.local.set({
-      bridge_connected: connected,
       tab_count: tabs.length,
       last_updated: Date.now()
     });
   } catch (e) {
     // Ignore context invalidation
   }
-}
-
-// Establish WebSocket connection
-function connectBridge() {
-  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
-    return;
-  }
-
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-
-  try {
-    socket = new WebSocket(WS_URL);
-  } catch (err) {
-    scheduleReconnect();
-    return;
-  }
-
-  socket.onopen = async () => {
-    await updateStatus(true);
-    try {
-      socket.send(JSON.stringify({
-        type: 'hello',
-        role: 'chrome_extension',
-        version: '1.1.0'
-      }));
-    } catch (e) {}
-
-    // Setup keepalive ping to prevent Service Worker hibernation while connected
-    if (pingInterval) clearInterval(pingInterval);
-    pingInterval = setInterval(() => {
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        try {
-          socket.send(JSON.stringify({ type: 'ping' }));
-        } catch (e) {}
-      }
-    }, PING_INTERVAL_MS);
-  };
-
-  socket.onmessage = async (event) => {
-    let data;
-    try {
-      data = JSON.parse(event.data);
-    } catch (e) {
-      return;
-    }
-
-    if (data.type === 'ping') {
-      try {
-        socket.send(JSON.stringify({ type: 'pong' }));
-      } catch (e) {}
-      return;
-    }
-
-    if (data.type === 'pong') {
-      return;
-    }
-
-    // Execute incoming agent command
-    if (data.id && data.action) {
-      try {
-        const result = await executeAgentCommand(data.action, data.params || {});
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({
-            id: data.id,
-            success: true,
-            result: result
-          }));
-        }
-      } catch (err) {
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({
-            id: data.id,
-            success: false,
-            error: err.message || String(err)
-          }));
-        }
-      }
-    }
-  };
-
-  socket.onclose = () => {
-    if (pingInterval) {
-      clearInterval(pingInterval);
-      pingInterval = null;
-    }
-    updateStatus(false);
-    scheduleReconnect();
-  };
-
-  socket.onerror = () => {
-    // Gentle: no unhandled console spam when bridge is offline
-  };
-}
-
-function scheduleReconnect() {
-  if (reconnectTimer) return;
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connectBridge();
-  }, RECONNECT_DELAY_MS);
 }
 
 /**
@@ -1133,7 +1018,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'get_status') {
     chrome.tabs.query({}).then(tabs => {
       sendResponse({
-        connected: isConnected,
         tab_count: tabs.length
       });
     });
@@ -1158,7 +1042,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Setup context menu for right-clicking extension icon
 chrome.runtime.onInstalled.addListener(() => {
-  connectBridge();
+  updateTabCount();
   try {
     chrome.contextMenus.create({
       id: 'open_manager_tab',
@@ -1174,10 +1058,10 @@ chrome.contextMenus.onClicked.addListener((info) => {
   }
 });
 
-// Wake up & connect on browser events
-chrome.runtime.onStartup.addListener(connectBridge);
-chrome.tabs.onCreated.addListener(() => updateStatus(isConnected));
-chrome.tabs.onRemoved.addListener(() => updateStatus(isConnected));
+// Update tab count on browser events
+chrome.runtime.onStartup.addListener(updateTabCount);
+chrome.tabs.onCreated.addListener(updateTabCount);
+chrome.tabs.onRemoved.addListener(updateTabCount);
 
-// Initial connection on worker load
-connectBridge();
+// Initial tab count update on worker load
+updateTabCount();
