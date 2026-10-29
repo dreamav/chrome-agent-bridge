@@ -26,41 +26,26 @@
       user-select: none;
     }
 
+    html {
+      width: 360px;
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      overflow: hidden;
+    }
+
     body {
       width: 360px;
-      max-height: 590px;
+      margin: 0;
       padding: 14px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-      background: var(--bg);
+      background:
+        radial-gradient(circle at 100% 0%, rgba(56, 189, 248, 0.15) 0%, transparent 140px),
+        radial-gradient(circle at 0% 100%, rgba(129, 140, 248, 0.12) 0%, transparent 120px),
+        var(--bg);
       color: var(--text-main);
-      overflow-x: hidden;
-      overflow-y: auto;
+      overflow: hidden;
       position: relative;
-    }
-
-    /* Ambient background glow */
-    body::before {
-      content: '';
-      position: absolute;
-      top: -40px;
-      right: -40px;
-      width: 140px;
-      height: 140px;
-      background: radial-gradient(circle, rgba(56, 189, 248, 0.15), transparent 70%);
-      pointer-events: none;
-      z-index: 0;
-    }
-
-    body::after {
-      content: '';
-      position: absolute;
-      bottom: -30px;
-      left: -30px;
-      width: 120px;
-      height: 120px;
-      background: radial-gradient(circle, rgba(129, 140, 248, 0.12), transparent 70%);
-      pointer-events: none;
-      z-index: 0;
     }
 
     .container {
@@ -99,38 +84,6 @@
       color: #fff;
     }
 
-    .badge-status {
-      font-size: 11px;
-      font-weight: 600;
-      padding: 3px 8px;
-      border-radius: 12px;
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--card-border);
-      transition: all 0.3s ease;
-    }
-
-    .status-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: var(--red-offline);
-      box-shadow: 0 0 6px var(--red-offline);
-      transition: all 0.3s ease;
-    }
-
-    .badge-status.connected .status-dot {
-      background: var(--green-online);
-      box-shadow: 0 0 8px var(--green-online);
-      animation: pulse 2s infinite ease-in-out;
-    }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.6; transform: scale(1.15); }
-    }
 
     /* Segmented Nav Tabs */
     .nav-tabs {
@@ -559,21 +512,6 @@
       box-shadow: 0 4px 14px rgba(56, 189, 248, 0.3);
     }
 
-    /* Footer */
-    .footer {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 9.5px;
-      color: var(--text-muted);
-      padding: 2px 2px 0 2px;
-    }
-
-    .endpoint {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      color: #7dd3fc;
-      opacity: 0.9;
-    }
   </style>
 </head>
 <body>
