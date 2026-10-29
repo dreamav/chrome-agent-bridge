@@ -382,14 +382,15 @@ function showTabHoverPreview(tab, context, itemEl) {
         }
       }, (res) => {
         if (res && res.success) {
+          const accSuffix = res.accountTitle ? ` (${res.accountTitle})` : '';
           if (res.alreadyAdded) {
             btnWatchLater.innerHTML = '<span>✓</span> Уже в «Позже»';
             btnWatchLater.classList.add('success-glow');
-            showToast('✓ Это видео уже находится в «Смотреть позже»!', 3500);
+            showToast(`✓ Это видео уже в «Смотреть позже»${accSuffix}!`, 3500);
           } else {
             btnWatchLater.innerHTML = '<span>✓</span> В «Позже»!';
             btnWatchLater.classList.add('success-glow');
-            showToast('✓ Добавлено в «Смотреть позже» на вашем YouTube!', 3500);
+            showToast(`✓ Добавлено в «Смотреть позже»${accSuffix}!`, 3500);
           }
         } else {
           btnWatchLater.disabled = false;

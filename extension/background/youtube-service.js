@@ -1,7 +1,17 @@
 /**
  * Chrome Agent Bridge - YouTube Service
  * Handles authenticated additions to YouTube 'Watch Later' playlist via InnerTube API.
+ * Supports active YouTube brand accounts / delegated identities (DELEGATED_SESSION_ID & X-Goog-PageId).
  */
+
+function isRealYouTubePage(tab) {
+  if (!tab || !tab.url) return false;
+  const u = tab.url;
+  return u.includes('youtube.com') && 
+    !u.includes('/robots.txt') && 
+    !u.includes('/favicon.ico') &&
+    !u.includes('accounts.google.com');
+}
 
 async function addVideoToYouTubeWatchLater(videoId, preferredTabId) {
   if (!videoId || typeof videoId !== 'string') {
@@ -10,12 +20,21 @@ async function addVideoToYouTubeWatchLater(videoId, preferredTabId) {
 
   const cleanVideoId = videoId.trim();
 
-  // Pick target YouTube tab: first check preferredTabId, then any open YouTube tab
+  // 1. Retrieve last known YouTube auth context (cached channel/brand account)
+  let cachedContext = null;
+  try {
+    const stored = await chrome.storage.local.get(['yt_account_context']);
+    cachedContext = stored.yt_account_context || null;
+  } catch (e) {
+    // Ignore storage read error
+  }
+
+  // 2. Select target YouTube tab: prioritize active/open content tabs with loaded ytcfg
   let targetTab = null;
   if (typeof preferredTabId === 'number') {
     try {
       const t = await chrome.tabs.get(preferredTabId);
-      if (t && t.url && t.url.includes('youtube.com') && !t.discarded) {
+      if (t && isRealYouTubePage(t) && !t.discarded) {
         targetTab = t;
       }
     } catch (e) {
@@ -25,18 +44,52 @@ async function addVideoToYouTubeWatchLater(videoId, preferredTabId) {
 
   if (!targetTab) {
     const ytTabs = await chrome.tabs.query({ url: '*://*.youtube.com/*' });
-    targetTab = ytTabs.find(t => !t.discarded && t.status === 'complete')
-             || ytTabs.find(t => !t.discarded)
-             || ytTabs[0];
+    
+    // Priority:
+    // a) Active content tab in any window (especially the user's current YouTube window)
+    const activeContentTab = ytTabs.find(t => t.active && !t.discarded && isRealYouTubePage(t));
+    // b) Fully loaded content tab (watch page, home, channel)
+    const readyContentTab = ytTabs.find(t => t.status === 'complete' && !t.discarded && isRealYouTubePage(t));
+    // c) Any non-discarded real content tab
+    const anyContentTab = ytTabs.find(t => !t.discarded && isRealYouTubePage(t));
+    // d) Fallback to any tab
+    const fallbackTab = ytTabs.find(t => !t.discarded) || ytTabs[0];
+
+    targetTab = activeContentTab || readyContentTab || anyContentTab || fallbackTab;
   }
 
   let createdTempTab = false;
   if (!targetTab) {
-    // If no YouTube tab is open, open a lightweight background tab to access YouTube origin
+    // If no YouTube tab is open:
+    // If we have cached brand account info, lightweight robots.txt suffices for cookie transport
+    // If not, open desktop YouTube in background to initialize ytcfg and active channel identity
     try {
-      targetTab = await chrome.tabs.create({ url: 'https://www.youtube.com/robots.txt', active: false });
+      const urlToOpen = cachedContext?.delegatedSessionId
+        ? 'https://www.youtube.com/robots.txt'
+        : 'https://www.youtube.com/?app=desktop';
+
+      targetTab = await chrome.tabs.create({ url: urlToOpen, active: false });
       createdTempTab = true;
-      await new Promise(r => setTimeout(r, 600));
+
+      // Wait for tab readiness (up to 2500ms)
+      await new Promise((resolve) => {
+        let done = false;
+        const timer = setTimeout(() => {
+          if (!done) { done = true; resolve(); }
+        }, 2500);
+
+        const listener = (tabId, changeInfo) => {
+          if (tabId === targetTab.id && (changeInfo.status === 'complete' || changeInfo.title)) {
+            if (!done) {
+              done = true;
+              clearTimeout(timer);
+              chrome.tabs.onUpdated.removeListener(listener);
+              resolve();
+            }
+          }
+        };
+        chrome.tabs.onUpdated.addListener(listener);
+      });
     } catch (createErr) {
       console.warn('Could not create temp YouTube tab:', createErr);
     }
@@ -50,7 +103,7 @@ async function addVideoToYouTubeWatchLater(videoId, preferredTabId) {
     const results = await chrome.scripting.executeScript({
       target: { tabId: targetTab.id },
       world: 'MAIN',
-      func: async (vId) => {
+      func: async (vId, fallbackAuth) => {
         try {
           // 1. Extract SAPISID or __Secure-3PAPISID from document.cookie
           function getSapisid() {
@@ -60,6 +113,7 @@ async function addVideoToYouTubeWatchLater(videoId, preferredTabId) {
             for (const c of cookies) {
               if (c.startsWith('SAPISID=')) return c.substring(8);
               if (c.startsWith('__Secure-3PAPISID=')) return c.substring(18);
+              if (c.startsWith('__Secure-1PAPISID=')) return c.substring(18);
             }
             return null;
           }
@@ -72,7 +126,7 @@ async function addVideoToYouTubeWatchLater(videoId, preferredTabId) {
             };
           }
 
-          // 2. Compute SAPISIDHASH (Date.now() in milliseconds!)
+          // 2. Compute SAPISIDHASH (Date.now() in milliseconds)
           async function sha1(str) {
             const buffer = new TextEncoder().encode(str);
             const hashBuffer = await window.crypto.subtle.digest('SHA-1', buffer);
@@ -85,27 +139,117 @@ async function addVideoToYouTubeWatchLater(videoId, preferredTabId) {
           const digest = await sha1(`${timestamp} ${sapisid} ${origin}`);
           const sapisidhash = `${timestamp}_${digest}`;
 
-          // 3. Client version from ytcfg
-          const clientVersion = window.ytcfg?.data_?.INNERTUBE_CLIENT_VERSION 
-                             || (typeof window.ytcfg?.get === 'function' && window.ytcfg.get('INNERTUBE_CLIENT_VERSION'))
-                             || '2.20261025.01.00';
+          // 3. Helper to extract configuration from window.ytcfg
+          function getYtCfg(key) {
+            try {
+              if (typeof window.ytcfg?.get === 'function') {
+                const val = window.ytcfg.get(key);
+                if (val !== undefined && val !== null) return val;
+              }
+              if (window.ytcfg?.data_ && window.ytcfg.data_[key] !== undefined && window.ytcfg.data_[key] !== null) {
+                return window.ytcfg.data_[key];
+              }
+              if (typeof window.ytcfg?.d === 'function') {
+                const d = window.ytcfg.d();
+                if (d && d[key] !== undefined && d[key] !== null) return d[key];
+              }
+            } catch (e) {}
+            return null;
+          }
 
-          // 4. Send InnerTube browse/edit_playlist request
-          const endpoint = 'https://www.youtube.com/youtubei/v1/browse/edit_playlist';
+          const innertubeContext = getYtCfg('INNERTUBE_CONTEXT');
+
+          // Active Brand Account / Channel identity (DELEGATED_SESSION_ID = Google PageId)
+          const delegatedSessionId = getYtCfg('DELEGATED_SESSION_ID')
+            || innertubeContext?.user?.onBehalfOfUser
+            || innertubeContext?.user?.delegatedSessionId
+            || fallbackAuth?.delegatedSessionId
+            || null;
+
+          const sessionIndex = getYtCfg('SESSION_INDEX')
+            ?? fallbackAuth?.sessionIndex
+            ?? '0';
+
+          const apiKey = getYtCfg('INNERTUBE_API_KEY')
+            || fallbackAuth?.apiKey
+            || null;
+
+          const clientVersion = getYtCfg('INNERTUBE_CLIENT_VERSION')
+            || fallbackAuth?.clientVersion
+            || '2.20261025.01.00';
+
+          const visitorData = getYtCfg('VISITOR_DATA')
+            || fallbackAuth?.visitorData
+            || null;
+
+          // Attempt to extract active channel/profile title
+          function getActiveAccountTitle() {
+            try {
+              const avatarImg = document.querySelector('button#avatar-btn img, yt-img-shadow#avatar img');
+              if (avatarImg && avatarImg.alt) {
+                const clean = avatarImg.alt
+                  .replace(/^(?:Аватар профиля|Аватар пользователя|Аватарка|Avatar image|Profile photo)(?::|\s*[-–—]\s*)?\s*/i, '')
+                  .trim();
+                if (clean && clean.length > 0 && clean.length < 50) return clean;
+              }
+            } catch (e) {}
+            return fallbackAuth?.accountTitle || null;
+          }
+          const accountTitle = getActiveAccountTitle();
+
+          // 4. Construct InnerTube headers
+          const reqHeaders = {
+            'Content-Type': 'application/json',
+            'Authorization': `SAPISIDHASH ${sapisidhash}`,
+            'X-Goog-AuthUser': String(sessionIndex),
+            'X-YouTube-Client-Name': '1',
+            'X-YouTube-Client-Version': clientVersion,
+            'X-Origin': origin
+          };
+
+          if (delegatedSessionId) {
+            reqHeaders['X-Goog-PageId'] = String(delegatedSessionId);
+          }
+          if (visitorData) {
+            reqHeaders['X-Goog-Visitor-Id'] = String(visitorData);
+          }
+
+          // 5. Construct payload context
+          let reqContext = null;
+          if (innertubeContext && typeof innertubeContext === 'object') {
+            try {
+              reqContext = JSON.parse(JSON.stringify(innertubeContext));
+            } catch (e) {
+              reqContext = null;
+            }
+          }
+          if (!reqContext) {
+            reqContext = {
+              client: {
+                clientName: 'WEB',
+                clientVersion: clientVersion
+              }
+            };
+          }
+
+          // Ensure delegated channel identity is explicitly set on user context
+          if (delegatedSessionId) {
+            if (!reqContext.user) reqContext.user = {};
+            reqContext.user.onBehalfOfUser = String(delegatedSessionId);
+            reqContext.user.delegatedSessionId = String(delegatedSessionId);
+          }
+
+          // 6. Send InnerTube browse/edit_playlist request
+          const endpoint = apiKey
+            ? `https://www.youtube.com/youtubei/v1/browse/edit_playlist?key=${apiKey}&prettyPrint=false`
+            : 'https://www.youtube.com/youtubei/v1/browse/edit_playlist';
+
           const res = await fetch(endpoint, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `SAPISIDHASH ${sapisidhash}`
-            },
+            headers: reqHeaders,
             credentials: 'include',
             body: JSON.stringify({
-              context: {
-                client: {
-                  clientName: 'WEB',
-                  clientVersion: clientVersion
-                }
-              },
+              context: reqContext,
               actions: [
                 {
                   addedVideoId: vId,
@@ -122,8 +266,23 @@ async function addVideoToYouTubeWatchLater(videoId, preferredTabId) {
 
           const data = await res.json();
 
+          const currentAuthContext = {
+            delegatedSessionId: delegatedSessionId ? String(delegatedSessionId) : null,
+            sessionIndex: String(sessionIndex),
+            clientVersion,
+            apiKey: apiKey ? String(apiKey) : null,
+            visitorData: visitorData ? String(visitorData) : null,
+            accountTitle: accountTitle ? String(accountTitle) : null,
+            savedAt: Date.now()
+          };
+
           if (data && data.status === 'STATUS_SUCCEEDED') {
-            return { success: true, status: 'STATUS_SUCCEEDED', data };
+            return {
+              success: true,
+              status: 'STATUS_SUCCEEDED',
+              authContext: currentAuthContext,
+              data
+            };
           }
 
           // Extract error/alert message
@@ -143,7 +302,12 @@ async function addVideoToYouTubeWatchLater(videoId, preferredTabId) {
             alertMsg.toLowerCase().includes('already added')
           );
           if (isAlreadyAdded) {
-            return { success: true, alreadyAdded: true, status: 'ALREADY_IN_PLAYLIST' };
+            return {
+              success: true,
+              alreadyAdded: true,
+              status: 'ALREADY_IN_PLAYLIST',
+              authContext: currentAuthContext
+            };
           }
 
           return {
@@ -155,13 +319,30 @@ async function addVideoToYouTubeWatchLater(videoId, preferredTabId) {
           return { success: false, error: e.message };
         }
       },
-      args: [cleanVideoId]
+      args: [cleanVideoId, cachedContext]
     });
 
     if (results && results[0] && results[0].result) {
       const r = results[0].result;
+
+      // Update background cache with latest YouTube auth identity
+      if (r.authContext) {
+        try {
+          await chrome.storage.local.set({ yt_account_context: r.authContext });
+        } catch (saveErr) {
+          console.warn('Could not cache yt_account_context:', saveErr);
+        }
+      }
+
       if (r.success) {
-        return { success: true, videoId: cleanVideoId, alreadyAdded: !!r.alreadyAdded, method: 'in_tab_innertube' };
+        return {
+          success: true,
+          videoId: cleanVideoId,
+          alreadyAdded: !!r.alreadyAdded,
+          accountTitle: r.authContext?.accountTitle || null,
+          delegatedSessionId: r.authContext?.delegatedSessionId || null,
+          method: 'in_tab_innertube'
+        };
       }
       if (r.error) {
         throw new Error(r.error);
@@ -179,3 +360,4 @@ async function addVideoToYouTubeWatchLater(videoId, preferredTabId) {
     }
   }
 }
+
