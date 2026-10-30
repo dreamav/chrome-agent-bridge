@@ -311,12 +311,17 @@ function renderWindowsAndGroups() {
 
   const sessionTitleMatches = (ManagerState.activeSession.name || ManagerState.activeSession.title || '').toLowerCase().includes(filter);
   const hasAnyTabMatch = windows.some(w =>
+    (w.name || w.title || '').toLowerCase().includes(filter) ||
     (w.tabs || []).some(t => `${t.title || ''} ${t.url || ''}`.toLowerCase().includes(filter))
   );
 
   // Calculate total matches in this session
   if (filter) {
     windows.forEach(win => {
+      const winTitleText = (win.name || win.title || '').toLowerCase();
+      if (winTitleText.includes(filter)) {
+        totalMatches++;
+      }
       (win.tabs || []).forEach(t => {
         const text = `${t.title || ''} ${t.url || ''}`.toLowerCase();
         if (text.includes(filter)) {
@@ -337,6 +342,9 @@ function renderWindowsAndGroups() {
   windows.forEach((win, winIndex) => {
     const winTabs = win.tabs || [];
     const winGroups = win.groups || [];
+    const defaultWinTitle = `Окно ${winIndex + 1}`;
+    const winTitle = win.name || win.title || defaultWinTitle;
+    const winTitleMatch = (win.name || win.title || '').toLowerCase().includes(filter);
 
     // Group tabs by groupId, preserving original tabIndex
     const groupedTabsMap = new Map();
@@ -358,6 +366,7 @@ function renderWindowsAndGroups() {
     const matchesTab = (item) => {
       const t = item.tab;
       if (!filter || ManagerState.showAllInCurrentSession) return true;
+      if (winTitleMatch) return true;
       if (hasAnyTabMatch) {
         const text = `${t.title || ''} ${t.url || ''}`.toLowerCase();
         return text.includes(filter);
@@ -395,10 +404,13 @@ function renderWindowsAndGroups() {
     const winCard = document.createElement('div');
     winCard.className = `window-card ${isWinCollapsed ? 'collapsed' : ''} ${isWinSelected ? 'is-selected' : ''}`;
 
-    const winTitle = `Окно ${winIndex + 1}`;
     const winBadge = `${winTabs.length} вкладок, ${winGroups.length} групп`;
 
     const winCheckboxHtml = `<label class="session-cb-label" title="Выбрать окно для массовых действий"><input type="checkbox" class="session-cb session-cb-window" data-win-idx="${winIndex}" ${isWinSelected ? 'checked' : ''}></label>`;
+
+    const winRenameBtnHtml = !isLive
+      ? `<button class="btn-rename-window" data-win-idx="${winIndex}" title="Переименовать окно" type="button">✏️</button>`
+      : '';
 
     const winDeleteBtnHtml = !isLive
       ? `<button class="btn-mini-action btn-danger-action btn-delete-window" data-win-idx="${winIndex}" title="Удалить это окно из сохранённой сессии">🗑️ Удалить окно</button>`
@@ -410,7 +422,9 @@ function renderWindowsAndGroups() {
           ${winCheckboxHtml}
           <span class="window-toggle-arrow">▼</span>
           <span class="window-icon">🪟</span>
-          <span class="window-title">${winTitle}</span>
+          <span class="window-title ${!isLive ? 'can-edit' : ''}" title="${!isLive ? 'Кликните, чтобы переименовать окно' : ''}">${escapeHtml(winTitle)}</span>
+          ${!isLive ? `<input type="text" class="window-title-input hidden" maxlength="80" value="${escapeHtml(winTitle)}" placeholder="${defaultWinTitle}">` : ''}
+          ${winRenameBtnHtml}
           <span class="window-stats">(${winBadge})</span>
         </div>
         <div class="window-actions-right">
@@ -423,9 +437,98 @@ function renderWindowsAndGroups() {
       <div class="window-body"></div>
     `;
 
+    const winHeader = winCard.querySelector('.window-header');
+    const winTitleSpan = winHeader.querySelector('.window-title');
+    const winTitleInput = winHeader.querySelector('.window-title-input');
+    const btnRenameWin = winHeader.querySelector('.btn-rename-window');
+
+    // Inline Window Renaming logic (for saved sessions)
+    let isEditingThisWindow = false;
+
+    function startEditingWindowTitle() {
+      if (isLive || isEditingThisWindow || !winTitleInput) return;
+      isEditingThisWindow = true;
+      winTitleSpan.classList.add('hidden');
+      if (btnRenameWin) btnRenameWin.classList.add('hidden');
+      winTitleInput.classList.remove('hidden');
+      winTitleInput.value = win.name || win.title || defaultWinTitle;
+      winTitleInput.focus();
+      winTitleInput.select();
+    }
+
+    function cancelEditingWindowTitle() {
+      if (!isEditingThisWindow || !winTitleInput) return;
+      isEditingThisWindow = false;
+      winTitleInput.classList.add('hidden');
+      winTitleSpan.classList.remove('hidden');
+      if (btnRenameWin) btnRenameWin.classList.remove('hidden');
+      winTitleInput.value = win.name || win.title || defaultWinTitle;
+      winTitleInput.blur();
+    }
+
+    async function saveEditingWindowTitle() {
+      if (!isEditingThisWindow || !winTitleInput) return;
+      isEditingThisWindow = false;
+      const rawVal = winTitleInput.value.trim();
+      const newName = rawVal || defaultWinTitle;
+      const oldName = win.name || win.title || defaultWinTitle;
+
+      winTitleInput.classList.add('hidden');
+      winTitleSpan.classList.remove('hidden');
+      if (btnRenameWin) btnRenameWin.classList.remove('hidden');
+      winTitleInput.blur();
+
+      if (newName === oldName && (win.name || win.title)) {
+        winTitleSpan.textContent = oldName;
+        return;
+      }
+
+      win.name = newName;
+      win.title = newName;
+      winTitleSpan.textContent = newName;
+      showToast(`Окно переименовано: «${newName}»`);
+      await persistUpdatedSavedSession(ManagerState.activeSession);
+    }
+
+    if (btnRenameWin) {
+      btnRenameWin.addEventListener('click', (e) => {
+        e.stopPropagation();
+        startEditingWindowTitle();
+      });
+    }
+
+    if (winTitleInput) {
+      winTitleInput.addEventListener('click', (e) => e.stopPropagation());
+      winTitleInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          saveEditingWindowTitle();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          cancelEditingWindowTitle();
+        }
+      });
+      winTitleInput.addEventListener('blur', () => {
+        if (isEditingThisWindow) {
+          saveEditingWindowTitle();
+        }
+      });
+    }
+
     // Window collapse/expand toggle
-    winCard.querySelector('.window-header').addEventListener('click', (e) => {
-      if (e.target.closest('.btn-mini-action') || e.target.closest('.session-cb-label')) return;
+    winHeader.addEventListener('click', (e) => {
+      if (
+        e.target.closest('.btn-mini-action') ||
+        e.target.closest('.session-cb-label') ||
+        e.target.closest('.window-title-input') ||
+        e.target.closest('.btn-rename-window')
+      ) return;
+
+      if (!isLive && e.target.closest('.window-title.can-edit')) {
+        startEditingWindowTitle();
+        return;
+      }
+
       if (winCard.classList.contains('collapsed')) {
         winCard.classList.remove('collapsed');
         ManagerState.collapsedWindows.delete(winKey);
@@ -739,7 +842,9 @@ function restoreFullSession(session = ManagerState.activeSession) {
 
 function restoreWindow(winIndex) {
   if (!ManagerState.activeSession) return;
-  showToast(`Восстановление Окна #${winIndex + 1}...`);
+  const win = ManagerState.activeSession.data?.[winIndex];
+  const winTitle = win?.name || win?.title || `Окно #${winIndex + 1}`;
+  showToast(`Восстановление ${winTitle}...`);
   chrome.runtime.sendMessage({
     action: 'restore_session',
     params: {
@@ -748,7 +853,7 @@ function restoreWindow(winIndex) {
     }
   }, (res) => {
     if (res && res.success) {
-      showToast(`✨ Окно #${winIndex + 1} успешно восстановлено!`);
+      showToast(`✨ ${winTitle} успешно восстановлено!`);
       fetchLiveSession();
     } else {
       showToast(`Ошибка: ${res?.error || 'Не удалось восстановить окно'}`);
@@ -781,9 +886,10 @@ function deleteWindowFromSession(winIndex) {
   if (!ManagerState.activeSession || ManagerState.activeSession.isLive) return;
   if (!ManagerState.activeSession.data || !ManagerState.activeSession.data[winIndex]) return;
 
-  const winTitle = `Окно ${winIndex + 1}`;
-  const winTabsCount = (ManagerState.activeSession.data[winIndex].tabs || []).length;
-  if (!confirm(`Удалить ${winTitle} (${winTabsCount} вкл.) из сохранённой сессии?`)) {
+  const win = ManagerState.activeSession.data[winIndex];
+  const winTitle = win.name || win.title || `Окно ${winIndex + 1}`;
+  const winTabsCount = (win.tabs || []).length;
+  if (!confirm(`Удалить «${winTitle}» (${winTabsCount} вкл.) из сохранённой сессии?`)) {
     return;
   }
 
@@ -1024,221 +1130,4 @@ async function restoreSelectedItems() {
   showToast('✨ Выбранные элементы успешно восстановлены в Chrome!');
   fetchLiveSession();
   clearSelection();
-}
-
-// --- YouTube Playlist Modal Controller ---
-
-function openYouTubePlaylistModal(videosList) {
-  if (!Array.isArray(videosList) || videosList.length === 0) {
-    showToast('Нет выбранных видео YouTube для добавления.');
-    return;
-  }
-
-  ManagerState.ytModalVideos = videosList;
-
-  if (DOM.ytModalVideoCount) {
-    DOM.ytModalVideoCount.textContent = `${videosList.length} ${getNoun(videosList.length, 'видео', 'видео', 'видео')}`;
-  }
-
-  if (DOM.ytModalStatusBox) DOM.ytModalStatusBox.classList.add('hidden');
-  if (DOM.btnYtModalSubmit) {
-    DOM.btnYtModalSubmit.disabled = false;
-    DOM.btnYtModalSubmit.innerHTML = '<span>▶️</span> Добавить в плейлист';
-  }
-  if (DOM.ytCustomPlaylistContainer) {
-    DOM.ytCustomPlaylistContainer.classList.add('hidden');
-  }
-  if (DOM.ytCustomPlaylistInput) {
-    DOM.ytCustomPlaylistInput.value = '';
-  }
-
-  if (DOM.ytPlaylistModal) {
-    DOM.ytPlaylistModal.classList.remove('hidden');
-    DOM.ytPlaylistModal.setAttribute('aria-hidden', 'false');
-  }
-
-  loadYouTubePlaylists();
-}
-
-function closeYouTubePlaylistModal() {
-  if (DOM.ytPlaylistModal) {
-    DOM.ytPlaylistModal.classList.add('hidden');
-    DOM.ytPlaylistModal.setAttribute('aria-hidden', 'true');
-  }
-  ManagerState.ytModalVideos = [];
-}
-
-async function loadYouTubePlaylists(forceRefresh = false) {
-  if (!forceRefresh && ManagerState.cachedPlaylists && ManagerState.cachedPlaylists.length > 0) {
-    populatePlaylistsDropdown(ManagerState.cachedPlaylists, ManagerState.cachedYtAccount);
-    return;
-  }
-
-  if (DOM.ytPlaylistsLoading) DOM.ytPlaylistsLoading.classList.remove('hidden');
-  if (DOM.ytModalAccountName) DOM.ytModalAccountName.textContent = 'Определение канала...';
-
-  const sampleVideoId = ManagerState.ytModalVideos[0]?.videoId || null;
-
-  chrome.runtime.sendMessage({
-    action: 'youtube_get_playlists',
-    params: { sampleVideoId }
-  }, (res) => {
-    if (DOM.ytPlaylistsLoading) DOM.ytPlaylistsLoading.classList.add('hidden');
-
-    if (res && res.success) {
-      const playlists = res.result?.playlists || [];
-      const accountTitle = res.result?.accountTitle || null;
-
-      ManagerState.cachedPlaylists = playlists;
-      ManagerState.cachedYtAccount = accountTitle;
-
-      populatePlaylistsDropdown(playlists, accountTitle);
-    } else {
-      populatePlaylistsDropdown([{ id: 'WL', title: 'Смотреть позже (Watch Later)', privacy: 'PRIVACY_PRIVATE' }], null);
-    }
-  });
-}
-
-function populatePlaylistsDropdown(playlists, accountTitle) {
-  if (DOM.ytModalAccountName) {
-    DOM.ytModalAccountName.textContent = accountTitle || 'Авторизованный канал';
-  }
-
-  if (!DOM.ytPlaylistSelect) return;
-  DOM.ytPlaylistSelect.innerHTML = '';
-
-  const lastUsedPlaylist = localStorage.getItem('chrome_bridge_yt_last_playlist') || 'WL';
-
-  playlists.forEach(p => {
-    const opt = document.createElement('option');
-    opt.value = p.id;
-    const privacyIcon = p.privacy === 'PRIVACY_PRIVATE' ? '🔒 ' : (p.privacy === 'PRIVACY_PUBLIC' ? '🌐 ' : '');
-    opt.textContent = `${privacyIcon}${p.title}`;
-    if (p.id === lastUsedPlaylist) {
-      opt.selected = true;
-    }
-    DOM.ytPlaylistSelect.appendChild(opt);
-  });
-}
-
-async function submitYouTubeAddToPlaylist() {
-  if (!ManagerState.ytModalVideos || ManagerState.ytModalVideos.length === 0) {
-    showToast('Не выбрано ни одного видео.');
-    return;
-  }
-
-  // Determine target playlist
-  let targetPlaylist = 'WL';
-  const isCustomVisible = DOM.ytCustomPlaylistContainer && !DOM.ytCustomPlaylistContainer.classList.contains('hidden');
-  const customVal = DOM.ytCustomPlaylistInput?.value?.trim();
-
-  if (isCustomVisible && customVal) {
-    targetPlaylist = customVal;
-  } else if (DOM.ytPlaylistSelect?.value) {
-    targetPlaylist = DOM.ytPlaylistSelect.value;
-  }
-
-  localStorage.setItem('chrome_bridge_yt_last_playlist', targetPlaylist);
-
-  // UI state: progress
-  if (DOM.btnYtModalSubmit) {
-    DOM.btnYtModalSubmit.disabled = true;
-    DOM.btnYtModalSubmit.innerHTML = '<span class="spinner-mini"></span> Добавление...';
-  }
-  if (DOM.ytModalStatusBox) {
-    DOM.ytModalStatusBox.classList.remove('hidden');
-  }
-  if (DOM.ytModalProgressFill) {
-    DOM.ytModalProgressFill.style.width = '35%';
-  }
-  if (DOM.ytModalStatusText) {
-    DOM.ytModalStatusText.textContent = `Отправка запроса в YouTube InnerTube для ${ManagerState.ytModalVideos.length} видео...`;
-  }
-
-  const videoIds = ManagerState.ytModalVideos.map(v => v.videoId);
-
-  chrome.runtime.sendMessage({
-    action: 'youtube_add_to_playlist',
-    params: {
-      videoIds,
-      playlistId: targetPlaylist
-    }
-  }, (res) => {
-    if (DOM.ytModalProgressFill) {
-      DOM.ytModalProgressFill.style.width = '100%';
-    }
-
-    if (res && res.success) {
-      const r = res.result || {};
-      const addedCount = r.addedCount || 0;
-      const alreadyCount = r.alreadyAddedCount || 0;
-      const channelSuffix = r.accountTitle ? ` (Канал: ${r.accountTitle})` : '';
-
-      let msg = '';
-      if (addedCount > 0 && alreadyCount > 0) {
-        msg = `✓ Добавлено ${addedCount} видео (ещё ${alreadyCount} уже были в плейлисте)${channelSuffix}!`;
-      } else if (alreadyCount > 0 && addedCount === 0) {
-        msg = `✓ Все ${alreadyCount} видео уже находятся в этом плейлисте${channelSuffix}!`;
-      } else {
-        msg = `✓ Успешно добавлено ${addedCount} видео в плейлист${channelSuffix}!`;
-      }
-
-      if (DOM.ytModalStatusText) {
-        DOM.ytModalStatusText.innerHTML = `<span style="color: #4ade80;">${escapeHtml(msg)}</span>`;
-      }
-      showToast(msg, 4500);
-
-      setTimeout(() => {
-        closeYouTubePlaylistModal();
-        clearSelection();
-      }, 1200);
-    } else {
-      const err = res?.error || 'Не удалось добавить видео в плейлист YouTube.';
-      if (DOM.ytModalStatusText) {
-        DOM.ytModalStatusText.innerHTML = `<span style="color: #f87171;">⚠️ ${escapeHtml(err)}</span>`;
-      }
-      if (DOM.btnYtModalSubmit) {
-        DOM.btnYtModalSubmit.disabled = false;
-        DOM.btnYtModalSubmit.innerHTML = '<span>▶️</span> Повторить попытку';
-      }
-      showToast(`⚠️ ${err}`, 5000);
-    }
-  });
-}
-
-function initYouTubeModalEvents() {
-  if (DOM.btnYtModalClose) {
-    DOM.btnYtModalClose.addEventListener('click', closeYouTubePlaylistModal);
-  }
-  if (DOM.btnYtModalCancel) {
-    DOM.btnYtModalCancel.addEventListener('click', closeYouTubePlaylistModal);
-  }
-  if (DOM.ytPlaylistModal) {
-    DOM.ytPlaylistModal.addEventListener('click', (e) => {
-      if (e.target === DOM.ytPlaylistModal) {
-        closeYouTubePlaylistModal();
-      }
-    });
-  }
-  if (DOM.btnRefreshYtPlaylists) {
-    DOM.btnRefreshYtPlaylists.addEventListener('click', (e) => {
-      e.stopPropagation();
-      loadYouTubePlaylists(true);
-    });
-  }
-  if (DOM.btnToggleCustomPlaylist) {
-    DOM.btnToggleCustomPlaylist.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (DOM.ytCustomPlaylistContainer) {
-        const isHidden = DOM.ytCustomPlaylistContainer.classList.contains('hidden');
-        DOM.ytCustomPlaylistContainer.classList.toggle('hidden', !isHidden);
-        if (isHidden && DOM.ytCustomPlaylistInput) {
-          DOM.ytCustomPlaylistInput.focus();
-        }
-      }
-    });
-  }
-  if (DOM.btnYtModalSubmit) {
-    DOM.btnYtModalSubmit.addEventListener('click', submitYouTubeAddToPlaylist);
-  }
 }

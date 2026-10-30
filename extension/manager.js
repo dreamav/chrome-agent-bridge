@@ -7,6 +7,7 @@
  * - manager/manager-preview.js: Glassmorphism tab preview & YouTube poster cards
  * - manager/manager-details-view.js: Active session details view, windows, groups & batch actions
  * - manager/manager-sidebar.js: Sidebar sessions list, search match pills, inline renaming & import
+ * - manager/manager-youtube-modal.js: YouTube batch playlist selection & InnerTube API modal
  */
 
 function handleSearchUpdate() {
@@ -90,6 +91,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initManagerDOM();
   initHoverPreviewEvents();
   initYouTubeModalEvents();
+  initSidebarEvents();
 
   // --- Search Input Listeners ---
   DOM.searchInput.addEventListener('input', () => {
@@ -166,17 +168,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   DOM.btnSaveLiveAsNew.addEventListener('click', handleSaveCurrent);
 
   // --- Floating Batch Action Bar Button Listeners ---
-  if (DOM.btnBatchYouTube) {
-    DOM.btnBatchYouTube.addEventListener('click', () => {
-      const ytVideos = getSelectedYouTubeVideos();
-      if (ytVideos.length === 0) {
-        showToast('Не выбрано ни одной вкладки с видео YouTube.');
-        return;
-      }
-      openYouTubePlaylistModal(ytVideos);
-    });
-  }
-
   if (DOM.btnBatchDelete) {
     DOM.btnBatchDelete.addEventListener('click', () => {
       deleteSelectedItems();
@@ -361,7 +352,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       DOM.searchInput.focus();
     }
     if (e.key === 'Escape') {
-      if (!DOM.ytPlaylistModal.classList.contains('hidden')) {
+      if (DOM.ytPlaylistModal && !DOM.ytPlaylistModal.classList.contains('hidden')) {
         closeYouTubePlaylistModal();
         return;
       }

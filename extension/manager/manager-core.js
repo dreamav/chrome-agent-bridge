@@ -197,6 +197,10 @@ function getSessionMatchStats(session, queryLower) {
 
   const windows = session.data || [];
   for (const win of windows) {
+    const winNameMatch = (win.name || win.title || '').toLowerCase().includes(q);
+    if (winNameMatch) {
+      tabMatches++;
+    }
     for (const t of (win.tabs || [])) {
       const text = `${t.title || ''} ${t.url || ''}`.toLowerCase();
       if (text.includes(q)) {

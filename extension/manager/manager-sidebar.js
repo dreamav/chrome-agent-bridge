@@ -480,3 +480,15 @@ async function importSessionBuddyBackup(file) {
     alert(`Успешно импортировано ${newUnique.length} сессий из Session Buddy!`);
   });
 }
+
+
+function initSidebarEvents() {
+  if (DOM.liveSessionCard) {
+    DOM.liveSessionCard.addEventListener('click', async () => {
+      await fetchLiveSession();
+      if (ManagerState.liveSession) {
+        selectSession(ManagerState.liveSession);
+      }
+    });
+  }
+}
