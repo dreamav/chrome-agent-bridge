@@ -21,7 +21,7 @@
           <img src="icons/icon48.png" alt="Logo" class="brand-logo">
           <div class="brand-text">
             <h2>Chrome Bridge</h2>
-            <span class="brand-badge">Session Manager v1.3</span>
+            <span class="brand-badge">Session Manager v1.4</span>
           </div>
         </div>
         <div class="status-badge connected">
@@ -188,10 +188,13 @@
           </div>
         </div>
         <div class="batch-bar-actions">
+          <button id="btnBatchYouTube" class="btn btn-yt-batch btn-glow-yt hidden" type="button" title="Добавить выбранные видео в плейлист YouTube">
+            <span>⏱️</span> В плейлист YouTube (<span id="batchYtCount">0</span>)
+          </button>
           <button id="btnBatchRestore" class="btn btn-primary btn-glow" type="button" title="Восстановить только выбранные окна/вкладки в Chrome">
             <span>⚡</span> Восстановить выбранное
           </button>
-          <button id="btnBatchDelete" class="btn btn-danger btn-glow-danger" type="button" title="Удалить выбранные элементы из сохранённой сессии">
+          <button id="btnBatchDelete" class="btn btn-danger btn-glow-danger" type="button" title="Удалить выбранные элементы">
             <span>🗑️</span> Удалить выбранное
           </button>
           <button id="btnBatchClear" class="btn btn-secondary btn-icon" type="button" title="Снять выделение">
@@ -200,6 +203,71 @@
         </div>
       </div>
     </main>
+  </div>
+
+  <!-- YouTube Playlist Selector Dialog / Modal -->
+  <div id="ytPlaylistModal" class="modal-overlay hidden" aria-hidden="true">
+    <div class="modal-card yt-modal-card">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <span class="modal-badge-icon">▶️</span>
+          <div>
+            <h2 class="modal-title">Добавить в плейлист YouTube</h2>
+            <div class="modal-subtitle" id="ytModalAccountInfo">
+              <span class="account-dot online"></span> Канал: <strong id="ytModalAccountName">Определение...</strong>
+            </div>
+          </div>
+        </div>
+        <button id="btnYtModalClose" class="btn-modal-close" type="button" title="Закрыть">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Target Videos Summary -->
+        <div class="yt-target-summary">
+          <span class="yt-summary-label">Выбрано видео для добавления:</span>
+          <span id="ytModalVideoCount" class="yt-summary-badge">0 видео</span>
+        </div>
+
+        <!-- Playlist Selection Mode -->
+        <div class="yt-form-group">
+          <label for="ytPlaylistSelect" class="yt-field-label">Выберите плейлист:</label>
+          <div class="yt-select-wrapper">
+            <select id="ytPlaylistSelect" class="yt-select">
+              <option value="WL">⏱️ Смотреть позже (Watch Later)</option>
+            </select>
+            <button id="btnRefreshYtPlaylists" class="btn btn-secondary btn-icon-mini" type="button" title="Обновить список плейлистов канала">🔄</button>
+          </div>
+          <div id="ytPlaylistsLoading" class="yt-loading-hint hidden">
+            <span class="spinner-mini"></span> Загрузка ваших плейлистов с YouTube...
+          </div>
+        </div>
+
+        <!-- Custom Playlist ID / URL Toggle -->
+        <div class="yt-custom-playlist-toggle">
+          <button id="btnToggleCustomPlaylist" type="button" class="btn-link-action">
+            + Указать другой плейлист по ссылке или ID
+          </button>
+        </div>
+
+        <div id="ytCustomPlaylistContainer" class="yt-form-group hidden">
+          <label for="ytCustomPlaylistInput" class="yt-field-label">ID или ссылка на плейлист:</label>
+          <input id="ytCustomPlaylistInput" type="text" class="yt-input" placeholder="Например: PLrSOXFDHBtfH... или https://www.youtube.com/playlist?list=...">
+        </div>
+
+        <!-- Status / Progress notification area -->
+        <div id="ytModalStatusBox" class="yt-status-box hidden">
+          <div id="ytModalProgressBar" class="yt-progress-bar"><div id="ytModalProgressFill" class="yt-progress-fill"></div></div>
+          <div id="ytModalStatusText" class="yt-status-text"></div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button id="btnYtModalCancel" class="btn btn-secondary" type="button">Отмена</button>
+        <button id="btnYtModalSubmit" class="btn btn-yt-submit btn-glow-yt" type="button">
+          <span>▶️</span> Добавить в плейлист
+        </button>
+      </div>
+    </div>
   </div>
 
   <!-- Floating Tab Hover Preview Card (Glassmorphism & YouTube Poster) -->

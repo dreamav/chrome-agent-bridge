@@ -68,6 +68,8 @@ function initManagerDOM() {
 
   DOM.batchActionBar = document.getElementById('batchActionBar');
   DOM.batchSelectedSummary = document.getElementById('batchSelectedSummary');
+  DOM.btnBatchYouTube = document.getElementById('btnBatchYouTube');
+  DOM.batchYtCount = document.getElementById('batchYtCount');
   DOM.btnBatchRestore = document.getElementById('btnBatchRestore');
   DOM.btnBatchDelete = document.getElementById('btnBatchDelete');
   DOM.btnBatchClear = document.getElementById('btnBatchClear');
@@ -75,6 +77,24 @@ function initManagerDOM() {
   DOM.tabHoverPreview = document.getElementById('tabHoverPreview');
   DOM.importSessionBuddyBtn = document.getElementById('importSessionBuddyBtn');
   DOM.sessionBuddyFileInput = document.getElementById('sessionBuddyFileInput');
+
+  // YouTube Playlist Modal Elements
+  DOM.ytPlaylistModal = document.getElementById('ytPlaylistModal');
+  DOM.ytModalAccountName = document.getElementById('ytModalAccountName');
+  DOM.btnYtModalClose = document.getElementById('btnYtModalClose');
+  DOM.ytModalVideoCount = document.getElementById('ytModalVideoCount');
+  DOM.ytPlaylistSelect = document.getElementById('ytPlaylistSelect');
+  DOM.btnRefreshYtPlaylists = document.getElementById('btnRefreshYtPlaylists');
+  DOM.ytPlaylistsLoading = document.getElementById('ytPlaylistsLoading');
+  DOM.btnToggleCustomPlaylist = document.getElementById('btnToggleCustomPlaylist');
+  DOM.ytCustomPlaylistContainer = document.getElementById('ytCustomPlaylistContainer');
+  DOM.ytCustomPlaylistInput = document.getElementById('ytCustomPlaylistInput');
+  DOM.ytModalStatusBox = document.getElementById('ytModalStatusBox');
+  DOM.ytModalProgressBar = document.getElementById('ytModalProgressBar');
+  DOM.ytModalProgressFill = document.getElementById('ytModalProgressFill');
+  DOM.ytModalStatusText = document.getElementById('ytModalStatusText');
+  DOM.btnYtModalCancel = document.getElementById('btnYtModalCancel');
+  DOM.btnYtModalSubmit = document.getElementById('btnYtModalSubmit');
 }
 
 // Global Manager State
@@ -92,7 +112,10 @@ const ManagerState = {
     groups: new Set(),
     tabs: new Set()
   },
-  currentSortOrder: localStorage.getItem('chrome_bridge_sort_order') || 'date_desc'
+  currentSortOrder: localStorage.getItem('chrome_bridge_sort_order') || 'date_desc',
+  ytModalVideos: [],
+  cachedPlaylists: null,
+  cachedYtAccount: null
 };
 
 // --- Utilities & Helpers ---

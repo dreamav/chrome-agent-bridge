@@ -22,7 +22,9 @@ const SUPPORTED_ACTIONS = [
   'rename_session',
   'update_session',
   'import_session_json',
-  'youtube_watch_later'
+  'youtube_watch_later',
+  'youtube_add_to_playlist',
+  'youtube_get_playlists'
 ];
 
 /**
@@ -121,9 +123,22 @@ async function executeAgentCommand(action, params = {}) {
 
     // --- YouTube Integration ---
     case 'youtube_watch_later': {
-      const videoId = params.videoId || params.video_id || params.id;
+      const videoIds = params.videoIds || params.video_ids || (params.videoId ? [params.videoId] : [params.id]);
       const tabId = params.tabId || params.tab_id;
-      return await addVideoToYouTubeWatchLater(videoId, tabId);
+      return await addVideosToYouTubePlaylist(videoIds, 'WL', tabId);
+    }
+
+    case 'youtube_add_to_playlist': {
+      const videoIds = params.videoIds || params.video_ids || (params.videoId ? [params.videoId] : [params.id]);
+      const playlistId = params.playlistId || params.playlist_id || 'WL';
+      const tabId = params.tabId || params.tab_id;
+      return await addVideosToYouTubePlaylist(videoIds, playlistId, tabId);
+    }
+
+    case 'youtube_get_playlists': {
+      const sampleVideoId = params.sampleVideoId || params.videoId || params.video_id || null;
+      const tabId = params.tabId || params.tab_id;
+      return await getYouTubePlaylists(sampleVideoId, tabId);
     }
 
     default:

@@ -86,9 +86,10 @@ function renderGlobalNoMatches(filter) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  // Initialize DOM references & hover preview handlers
+  // Initialize DOM references & event handlers
   initManagerDOM();
   initHoverPreviewEvents();
+  initYouTubeModalEvents();
 
   // --- Search Input Listeners ---
   DOM.searchInput.addEventListener('input', () => {
@@ -165,6 +166,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   DOM.btnSaveLiveAsNew.addEventListener('click', handleSaveCurrent);
 
   // --- Floating Batch Action Bar Button Listeners ---
+  if (DOM.btnBatchYouTube) {
+    DOM.btnBatchYouTube.addEventListener('click', () => {
+      const ytVideos = getSelectedYouTubeVideos();
+      if (ytVideos.length === 0) {
+        showToast('Не выбрано ни одной вкладки с видео YouTube.');
+        return;
+      }
+      openYouTubePlaylistModal(ytVideos);
+    });
+  }
+
   if (DOM.btnBatchDelete) {
     DOM.btnBatchDelete.addEventListener('click', () => {
       deleteSelectedItems();
@@ -249,54 +261,33 @@ document.addEventListener('DOMContentLoaded', async () => {
         );
         if (!choice) return;
 
-        await chrome.storage.local.set({ saved_sessions: native });
-        ManagerState.savedSessions = native;
-        showToast(`🧹 Удалено ${imported.length} сессий Session Buddy. Ваша родная сессия сохранена!`);
-      } else {
-        const count = ManagerState.savedSessions.length;
-        const choice = confirm(`🗑️ Удалить все сохранённые сессии (${count} шт.)?`);
-        if (!choice) return;
+        const updated = native;
+        await chrome.storage.local.set({ saved_sessions: updated });
+        ManagerState.savedSessions = updated;
+        DOM.savedCountBadge.textContent = updated.length;
+        renderSidebarSessions();
+        if (ManagerState.activeSession && ManagerState.activeSession.id && ManagerState.activeSession.id.startsWith('sb_')) {
+          if (ManagerState.liveSession) selectSession(ManagerState.liveSession);
+          else if (updated.length > 0) selectSession(updated[0]);
+        }
+        showToast(`🗑️ Удалено ${imported.length} сессий Session Buddy.`);
+        return;
+      }
 
+      if (confirm(`Удалить все сохранённые сессии (${ManagerState.savedSessions.length} шт.)? Это действие нельзя отменить.`)) {
         await chrome.storage.local.set({ saved_sessions: [] });
         ManagerState.savedSessions = [];
-        showToast(`История очищена.`);
-      }
-
-      if (ManagerState.activeSession && !ManagerState.activeSession.isLive && !ManagerState.savedSessions.find(s => s.id === ManagerState.activeSession.id)) {
-        if (ManagerState.savedSessions.length > 0) {
-          selectSession(ManagerState.savedSessions[0]);
-        } else if (ManagerState.liveSession) {
+        DOM.savedCountBadge.textContent = '0';
+        renderSidebarSessions();
+        if (ManagerState.liveSession) {
           selectSession(ManagerState.liveSession);
         }
-      }
-      renderSidebarSessions();
-    });
-  }
-
-  // Live session card click in sidebar
-  if (DOM.liveSessionCard) {
-    DOM.liveSessionCard.addEventListener('click', () => {
-      if (ManagerState.liveSession) {
-        selectSession(ManagerState.liveSession);
+        showToast('🗑️ История сохранённых сессий очищена.');
       }
     });
   }
 
-  // --- Session Buddy Import Button Handler ---
-  if (DOM.importSessionBuddyBtn && DOM.sessionBuddyFileInput) {
-    DOM.importSessionBuddyBtn.addEventListener('click', () => {
-      DOM.sessionBuddyFileInput.value = '';
-      DOM.sessionBuddyFileInput.click();
-    });
-
-    DOM.sessionBuddyFileInput.addEventListener('change', async (e) => {
-      const file = e.target.files && e.target.files[0];
-      if (!file) return;
-      await importSessionBuddyBackup(file);
-    });
-  }
-
-  // Sidebar Import JSON file (with Session Buddy fallback)
+  // --- Import JSON Listeners ---
   if (DOM.btnImportJson && DOM.importFileInput) {
     DOM.btnImportJson.addEventListener('click', () => {
       DOM.importFileInput.value = '';
@@ -306,76 +297,56 @@ document.addEventListener('DOMContentLoaded', async () => {
     DOM.importFileInput.addEventListener('change', (e) => {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
-
-      const reader = new FileReader();
-      reader.onload = async (event) => {
-        try {
-          const jsonContent = event.target.result;
-          const data = JSON.parse(jsonContent);
-
-          if (data && (data.collections || (data.data && data.data.collections) || data.sessions || (data.folders && !data.data))) {
-            await importSessionBuddyBackup(file);
-            return;
-          }
-
-          chrome.runtime.sendMessage({
-            action: 'import_session_json',
-            params: { json: jsonContent }
-          }, async (res) => {
-            if (res && res.success) {
-              const imported = res.result.session;
-              showToast(`Сессия «${imported.name}» успешно импортирована!`);
-              await fetchSavedSessions();
-              renderSidebarSessions();
-              selectSession(imported);
-            } else {
-              showToast(`Ошибка импорта: ${res?.error || 'Неверный формат JSON'}`);
-            }
-          });
-        } catch (err) {
-          showToast(`Ошибка чтения файла: ${err.message}`);
-        }
-      };
-      reader.readAsText(file);
+      handleImportFile(file);
     });
   }
 
-  // --- Sidebar Toggle and View Controls ---
+  // --- Session Buddy Direct Import ---
+  if (DOM.importSessionBuddyBtn && DOM.sessionBuddyFileInput) {
+    DOM.importSessionBuddyBtn.addEventListener('click', () => {
+      DOM.sessionBuddyFileInput.value = '';
+      DOM.sessionBuddyFileInput.click();
+    });
+
+    DOM.sessionBuddyFileInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      handleSessionBuddyImport(file);
+    });
+  }
+
+  // --- Sidebar Toggle Listeners ---
   if (DOM.btnToggleSidebar) {
     DOM.btnToggleSidebar.addEventListener('click', () => {
       DOM.sidebar.classList.toggle('collapsed');
     });
   }
 
+  // --- Expand / Collapse All Toggles ---
   if (DOM.btnExpandAll) {
     DOM.btnExpandAll.addEventListener('click', () => {
       ManagerState.collapsedWindows.clear();
       ManagerState.collapsedGroups.clear();
-      (ManagerState.activeSession?.data || []).forEach((win, winIndex) => {
-        (win.groups || []).forEach(g => {
-          const groupKey = `${ManagerState.activeSession.id}_win${winIndex}_grp${g.id}`;
-          ManagerState.collapsedGroups.delete(groupKey);
-          ManagerState.collapsedGroups.add(`exp_${groupKey}`);
-        });
-      });
-      renderWindowsAndGroups();
-      showToast('Все окна и группы развернуты');
+      document.querySelectorAll('.window-card.collapsed').forEach(c => c.classList.remove('collapsed'));
+      document.querySelectorAll('.tab-group-card.collapsed').forEach(c => c.classList.remove('collapsed'));
+      showToast('▾ Все окна и группы развернуты');
     });
   }
 
   if (DOM.btnCollapseAll) {
     DOM.btnCollapseAll.addEventListener('click', () => {
-      ManagerState.collapsedWindows.clear();
-      ManagerState.collapsedGroups.clear();
-      (ManagerState.activeSession?.data || []).forEach((win, winIndex) => {
-        ManagerState.collapsedWindows.add(`${ManagerState.activeSession.id}_win_${winIndex}`);
+      const windows = ManagerState.activeSession ? (ManagerState.activeSession.data || []) : [];
+      windows.forEach((win, winIdx) => {
+        const winKey = `${ManagerState.activeSession.id}_win_${winIdx}`;
+        ManagerState.collapsedWindows.add(winKey);
         (win.groups || []).forEach(g => {
-          const groupKey = `${ManagerState.activeSession.id}_win${winIndex}_grp${g.id}`;
+          const groupKey = `${ManagerState.activeSession.id}_win${winIdx}_grp${g.id}`;
           ManagerState.collapsedGroups.add(groupKey);
         });
       });
-      renderWindowsAndGroups();
-      showToast('Все окна и группы свернуты');
+      document.querySelectorAll('.window-card').forEach(c => c.classList.add('collapsed'));
+      document.querySelectorAll('.tab-group-card').forEach(c => c.classList.add('collapsed'));
+      showToast('▴ Все окна и группы свернуты');
     });
   }
 
@@ -389,12 +360,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       e.preventDefault();
       DOM.searchInput.focus();
     }
-    if (e.key === 'Escape' && document.activeElement === DOM.searchInput) {
-      DOM.searchInput.value = '';
-      ManagerState.searchQuery = '';
-      DOM.btnClearSearch.classList.add('hidden');
-      renderWindowsAndGroups();
-      DOM.searchInput.blur();
+    if (e.key === 'Escape') {
+      if (!DOM.ytPlaylistModal.classList.contains('hidden')) {
+        closeYouTubePlaylistModal();
+        return;
+      }
+      if (document.activeElement === DOM.searchInput) {
+        DOM.searchInput.value = '';
+        ManagerState.searchQuery = '';
+        DOM.btnClearSearch.classList.add('hidden');
+        renderWindowsAndGroups();
+        DOM.searchInput.blur();
+      }
     }
   });
 

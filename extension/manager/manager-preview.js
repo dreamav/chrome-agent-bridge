@@ -316,6 +316,9 @@ function showTabHoverPreview(tab, context, itemEl) {
         <button class="btn-preview-watch-later" type="button" title="Добавить в плейлист «Смотреть позже» вашего YouTube-аккаунта">
           <span>⏱️</span> В «Позже»
         </button>
+        <button class="btn-preview-playlist" type="button" title="Выбрать другой плейлист YouTube...">
+          <span>📋</span> В плейлист...
+        </button>
       ` : ''}
       <button class="btn-preview-copy" type="button" title="Скопировать ссылку в буфер обмена">
         <span>🔗</span> Копировать
@@ -364,7 +367,7 @@ function showTabHoverPreview(tab, context, itemEl) {
     openOrSwitchToTab(tab);
   });
 
-  // Connect Watch Later Button
+  // Connect Quick Watch Later Button
   const btnWatchLater = DOM.tabHoverPreview.querySelector('.btn-preview-watch-later');
   if (btnWatchLater && ytVideoId) {
     btnWatchLater.addEventListener('click', (e) => {
@@ -399,6 +402,23 @@ function showTabHoverPreview(tab, context, itemEl) {
           showToast(`⚠️ ${err}`, 5000);
         }
       });
+    });
+  }
+
+  // Connect Choose Playlist Button
+  const btnPlaylist = DOM.tabHoverPreview.querySelector('.btn-preview-playlist');
+  if (btnPlaylist && ytVideoId) {
+    btnPlaylist.addEventListener('click', (e) => {
+      e.stopPropagation();
+      hideTabHoverPreview(true);
+      if (typeof openYouTubePlaylistModal === 'function') {
+        openYouTubePlaylistModal([{
+          videoId: ytVideoId,
+          title: tab.title || 'Видео YouTube',
+          url: tab.url,
+          tabId: tab.id
+        }]);
+      }
     });
   }
 

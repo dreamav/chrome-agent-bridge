@@ -17,6 +17,41 @@ function clearSelection() {
   });
 }
 
+/**
+ * Collects all YouTube video records currently selected across tabs, groups, or windows.
+ * Deduplicates by videoId.
+ */
+function getSelectedYouTubeVideos() {
+  if (!ManagerState.activeSession || !ManagerState.activeSession.data) return [];
+  const windows = ManagerState.activeSession.data;
+  const results = [];
+  const seenIds = new Set();
+
+  windows.forEach((win, winIdx) => {
+    const isWholeWinSelected = ManagerState.selectedItems.windows.has(`win_${winIdx}`);
+    (win.tabs || []).forEach((tab, tabIdx) => {
+      const isTabSelected = isWholeWinSelected ||
+        ManagerState.selectedItems.tabs.has(`win_${winIdx}_tab_${tabIdx}`) ||
+        (tab.groupId && ManagerState.selectedItems.groups.has(`win_${winIdx}_grp_${tab.groupId}`));
+
+      if (isTabSelected && tab.url) {
+        const vId = extractYouTubeVideoId(tab.url);
+        if (vId && !seenIds.has(vId)) {
+          seenIds.add(vId);
+          results.push({
+            videoId: vId,
+            title: tab.title || 'Видео YouTube',
+            url: tab.url,
+            tabId: tab.id
+          });
+        }
+      }
+    });
+  });
+
+  return results;
+}
+
 function updateBatchBar() {
   if (!DOM.batchActionBar) return;
 
@@ -38,6 +73,35 @@ function updateBatchBar() {
   if (tabCount > 0) parts.push(`${tabCount} ${getNoun(tabCount, 'вкладку', 'вкладки', 'вкладок')}`);
 
   DOM.batchSelectedSummary.textContent = `Выбрано: ${parts.join(', ')}`;
+
+  // Update YouTube batch action button
+  const ytVideos = getSelectedYouTubeVideos();
+  if (DOM.btnBatchYouTube) {
+    if (ytVideos.length > 0) {
+      DOM.btnBatchYouTube.classList.remove('hidden');
+      if (DOM.batchYtCount) {
+        DOM.batchYtCount.textContent = ytVideos.length;
+      }
+      DOM.btnBatchYouTube.title = `Добавить выбранные видео (${ytVideos.length}) в плейлист YouTube`;
+    } else {
+      DOM.btnBatchYouTube.classList.add('hidden');
+    }
+  }
+
+  // Adapt buttons for Live session vs Saved session
+  const isLive = Boolean(ManagerState.activeSession?.isLive);
+  if (DOM.btnBatchRestore) {
+    DOM.btnBatchRestore.style.display = isLive ? 'none' : 'inline-flex';
+  }
+  if (DOM.btnBatchDelete) {
+    if (isLive) {
+      DOM.btnBatchDelete.innerHTML = '<span>🗑️</span> Закрыть выбранные';
+      DOM.btnBatchDelete.title = 'Закрыть выбранные вкладки прямо в Chrome';
+    } else {
+      DOM.btnBatchDelete.innerHTML = '<span>🗑️</span> Удалить выбранное';
+      DOM.btnBatchDelete.title = 'Удалить выбранные элементы из сохранённой сессии';
+    }
+  }
 }
 
 function checkIfWholeWindowSelected(winIndex, totalTabsInWin, winCard) {
@@ -92,9 +156,7 @@ function createTabItemElement(tab, context = {}) {
   const pinnedBadge = tab.pinned ? '<span class="tab-badge pinned">📌 PIN</span>' : '';
   const activeBadge = tab.active ? '<span class="tab-badge active-badge">★ ACTIVE</span>' : '';
 
-  const tabCheckboxHtml = !isLive
-    ? `<label class="session-cb-label" title="Выбрать вкладку"><input type="checkbox" class="session-cb session-cb-tab" data-win-idx="${winIdx}" data-tab-idx="${tabIdx}" ${isSelected ? 'checked' : ''}></label>`
-    : '';
+  const tabCheckboxHtml = `<label class="session-cb-label" title="Выбрать вкладку"><input type="checkbox" class="session-cb session-cb-tab" data-win-idx="${winIdx}" data-tab-idx="${tabIdx}" ${isSelected ? 'checked' : ''}></label>`;
 
   const tabDeleteBtnHtml = !isLive
     ? `<button class="tab-hover-btn btn-delete-tab" data-win-idx="${winIdx}" data-tab-idx="${tabIdx}" title="Удалить эту вкладку из сохранённой сессии">🗑️</button>`
@@ -156,7 +218,7 @@ function createTabItemElement(tab, context = {}) {
     });
   }
 
-  // Delete single tab button
+  // Delete single tab button (saved session only)
   const btnDelTab = item.querySelector('.btn-delete-tab');
   if (btnDelTab) {
     btnDelTab.addEventListener('click', (e) => {
@@ -304,9 +366,9 @@ function renderWindowsAndGroups() {
     };
 
     const filteredUngrouped = ungroupedTabs.filter(matchesTab);
+    const filteredGroups = [];
     let winMatchingTabsCount = filteredUngrouped.length;
 
-    const filteredGroups = [];
     winGroups.forEach(g => {
       const tabsInGroup = groupedTabsMap.get(g.id) || [];
       const groupTitleMatch = (g.title || '').toLowerCase().includes(filter);
@@ -336,9 +398,7 @@ function renderWindowsAndGroups() {
     const winTitle = `Окно ${winIndex + 1}`;
     const winBadge = `${winTabs.length} вкладок, ${winGroups.length} групп`;
 
-    const winCheckboxHtml = !isLive
-      ? `<label class="session-cb-label" title="Выбрать окно для массовых действий"><input type="checkbox" class="session-cb session-cb-window" data-win-idx="${winIndex}" ${isWinSelected ? 'checked' : ''}></label>`
-      : '';
+    const winCheckboxHtml = `<label class="session-cb-label" title="Выбрать окно для массовых действий"><input type="checkbox" class="session-cb session-cb-window" data-win-idx="${winIndex}" ${isWinSelected ? 'checked' : ''}></label>`;
 
     const winDeleteBtnHtml = !isLive
       ? `<button class="btn-mini-action btn-danger-action btn-delete-window" data-win-idx="${winIndex}" title="Удалить это окно из сохранённой сессии">🗑️ Удалить окно</button>`
@@ -400,14 +460,16 @@ function renderWindowsAndGroups() {
         });
 
         // Cascade to tabs
-        winTabs.forEach((_, tIdx) => {
+        winTabs.forEach((t, tIdx) => {
           const tKey = `win_${winIndex}_tab_${tIdx}`;
           if (checked) ManagerState.selectedItems.tabs.add(tKey);
           else ManagerState.selectedItems.tabs.delete(tKey);
         });
 
-        winCard.querySelectorAll('.session-cb-group, .session-cb-tab').forEach(c => {
+        // Update DOM checkboxes visually
+        winCard.querySelectorAll('.session-cb').forEach(c => {
           c.checked = checked;
+          c.indeterminate = false;
         });
         winCard.querySelectorAll('.tab-item').forEach(itemEl => {
           itemEl.classList.toggle('is-selected', checked);
@@ -417,7 +479,7 @@ function renderWindowsAndGroups() {
       });
     }
 
-    // Delete Window button handler
+    // Delete window button
     const btnDelWin = winCard.querySelector('.btn-delete-window');
     if (btnDelWin) {
       btnDelWin.addEventListener('click', (e) => {
@@ -439,9 +501,7 @@ function renderWindowsAndGroups() {
       const groupCard = document.createElement('div');
       groupCard.className = `tab-group-card color-${groupColor} ${isCollapsed ? 'collapsed' : ''}`;
 
-      const grpCheckboxHtml = !isLive
-        ? `<label class="session-cb-label" title="Выбрать группу для массовых действий"><input type="checkbox" class="session-cb session-cb-group" data-win-idx="${winIndex}" data-group-id="${groupDef.id}" ${isGrpSelected ? 'checked' : ''}></label>`
-        : '';
+      const grpCheckboxHtml = `<label class="session-cb-label" title="Выбрать группу для массовых действий"><input type="checkbox" class="session-cb session-cb-group" data-win-idx="${winIndex}" data-group-id="${groupDef.id}" ${isGrpSelected ? 'checked' : ''}></label>`;
 
       const grpDeleteBtnHtml = !isLive
         ? `<button class="btn-mini-action btn-danger-action btn-delete-group" data-win-idx="${winIndex}" data-group-id="${groupDef.id}" title="Удалить эту группу из сохранённой сессии">🗑️ Удалить группу</button>`
@@ -767,10 +827,7 @@ function deleteTabFromSession(winIndex, tabIndex) {
 // --- Batch Operations ---
 
 async function deleteSelectedItems() {
-  if (!ManagerState.activeSession || ManagerState.activeSession.isLive) {
-    showToast('Удаление доступно только для сохранённых сессий.');
-    return;
-  }
+  if (!ManagerState.activeSession) return;
 
   const winCount = ManagerState.selectedItems.windows.size;
   const grpCount = ManagerState.selectedItems.groups.size;
@@ -786,6 +843,48 @@ async function deleteSelectedItems() {
   if (grpCount > 0) parts.push(`${grpCount} ${getNoun(grpCount, 'группу', 'группы', 'групп')}`);
   if (tabCount > 0) parts.push(`${tabCount} ${getNoun(tabCount, 'вкладку', 'вкладки', 'вкладок')}`);
 
+  // 1. Live Session: Close tabs directly in Chrome!
+  if (ManagerState.activeSession.isLive) {
+    const windows = ManagerState.activeSession.data || [];
+    const tabIdsToClose = [];
+
+    windows.forEach((win, winIdx) => {
+      const isWholeWinSelected = ManagerState.selectedItems.windows.has(`win_${winIdx}`);
+      (win.tabs || []).forEach((tab, tabIdx) => {
+        const isTabSelected = isWholeWinSelected ||
+          ManagerState.selectedItems.tabs.has(`win_${winIdx}_tab_${tabIdx}`) ||
+          (tab.groupId && ManagerState.selectedItems.groups.has(`win_${winIdx}_grp_${tab.groupId}`));
+        if (isTabSelected && typeof tab.id === 'number' && tab.id > 0) {
+          tabIdsToClose.push(tab.id);
+        }
+      });
+    });
+
+    if (tabIdsToClose.length === 0) {
+      showToast('Не удалось определить вкладки Chrome для закрытия.');
+      return;
+    }
+
+    if (!confirm(`Закрыть в браузере Chrome выбранные вкладки (${tabIdsToClose.length} шт.)?`)) {
+      return;
+    }
+
+    chrome.runtime.sendMessage({
+      action: 'close_tabs',
+      params: { tab_ids: tabIdsToClose }
+    }, (res) => {
+      if (res && res.success) {
+        showToast(`🗑️ Закрыто вкладок в браузере: ${tabIdsToClose.length}`);
+        clearSelection();
+        fetchLiveSession();
+      } else {
+        showToast(`Ошибка закрытия: ${res?.error || ''}`);
+      }
+    });
+    return;
+  }
+
+  // 2. Saved Session: Delete from saved session structure
   const msg = `Удалить из сессии «${ManagerState.activeSession.name}» выбранное:\n• ${parts.join('\n• ')}?`;
   if (!confirm(msg)) return;
 
@@ -925,4 +1024,221 @@ async function restoreSelectedItems() {
   showToast('✨ Выбранные элементы успешно восстановлены в Chrome!');
   fetchLiveSession();
   clearSelection();
+}
+
+// --- YouTube Playlist Modal Controller ---
+
+function openYouTubePlaylistModal(videosList) {
+  if (!Array.isArray(videosList) || videosList.length === 0) {
+    showToast('Нет выбранных видео YouTube для добавления.');
+    return;
+  }
+
+  ManagerState.ytModalVideos = videosList;
+
+  if (DOM.ytModalVideoCount) {
+    DOM.ytModalVideoCount.textContent = `${videosList.length} ${getNoun(videosList.length, 'видео', 'видео', 'видео')}`;
+  }
+
+  if (DOM.ytModalStatusBox) DOM.ytModalStatusBox.classList.add('hidden');
+  if (DOM.btnYtModalSubmit) {
+    DOM.btnYtModalSubmit.disabled = false;
+    DOM.btnYtModalSubmit.innerHTML = '<span>▶️</span> Добавить в плейлист';
+  }
+  if (DOM.ytCustomPlaylistContainer) {
+    DOM.ytCustomPlaylistContainer.classList.add('hidden');
+  }
+  if (DOM.ytCustomPlaylistInput) {
+    DOM.ytCustomPlaylistInput.value = '';
+  }
+
+  if (DOM.ytPlaylistModal) {
+    DOM.ytPlaylistModal.classList.remove('hidden');
+    DOM.ytPlaylistModal.setAttribute('aria-hidden', 'false');
+  }
+
+  loadYouTubePlaylists();
+}
+
+function closeYouTubePlaylistModal() {
+  if (DOM.ytPlaylistModal) {
+    DOM.ytPlaylistModal.classList.add('hidden');
+    DOM.ytPlaylistModal.setAttribute('aria-hidden', 'true');
+  }
+  ManagerState.ytModalVideos = [];
+}
+
+async function loadYouTubePlaylists(forceRefresh = false) {
+  if (!forceRefresh && ManagerState.cachedPlaylists && ManagerState.cachedPlaylists.length > 0) {
+    populatePlaylistsDropdown(ManagerState.cachedPlaylists, ManagerState.cachedYtAccount);
+    return;
+  }
+
+  if (DOM.ytPlaylistsLoading) DOM.ytPlaylistsLoading.classList.remove('hidden');
+  if (DOM.ytModalAccountName) DOM.ytModalAccountName.textContent = 'Определение канала...';
+
+  const sampleVideoId = ManagerState.ytModalVideos[0]?.videoId || null;
+
+  chrome.runtime.sendMessage({
+    action: 'youtube_get_playlists',
+    params: { sampleVideoId }
+  }, (res) => {
+    if (DOM.ytPlaylistsLoading) DOM.ytPlaylistsLoading.classList.add('hidden');
+
+    if (res && res.success) {
+      const playlists = res.result?.playlists || [];
+      const accountTitle = res.result?.accountTitle || null;
+
+      ManagerState.cachedPlaylists = playlists;
+      ManagerState.cachedYtAccount = accountTitle;
+
+      populatePlaylistsDropdown(playlists, accountTitle);
+    } else {
+      populatePlaylistsDropdown([{ id: 'WL', title: 'Смотреть позже (Watch Later)', privacy: 'PRIVACY_PRIVATE' }], null);
+    }
+  });
+}
+
+function populatePlaylistsDropdown(playlists, accountTitle) {
+  if (DOM.ytModalAccountName) {
+    DOM.ytModalAccountName.textContent = accountTitle || 'Авторизованный канал';
+  }
+
+  if (!DOM.ytPlaylistSelect) return;
+  DOM.ytPlaylistSelect.innerHTML = '';
+
+  const lastUsedPlaylist = localStorage.getItem('chrome_bridge_yt_last_playlist') || 'WL';
+
+  playlists.forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    const privacyIcon = p.privacy === 'PRIVACY_PRIVATE' ? '🔒 ' : (p.privacy === 'PRIVACY_PUBLIC' ? '🌐 ' : '');
+    opt.textContent = `${privacyIcon}${p.title}`;
+    if (p.id === lastUsedPlaylist) {
+      opt.selected = true;
+    }
+    DOM.ytPlaylistSelect.appendChild(opt);
+  });
+}
+
+async function submitYouTubeAddToPlaylist() {
+  if (!ManagerState.ytModalVideos || ManagerState.ytModalVideos.length === 0) {
+    showToast('Не выбрано ни одного видео.');
+    return;
+  }
+
+  // Determine target playlist
+  let targetPlaylist = 'WL';
+  const isCustomVisible = DOM.ytCustomPlaylistContainer && !DOM.ytCustomPlaylistContainer.classList.contains('hidden');
+  const customVal = DOM.ytCustomPlaylistInput?.value?.trim();
+
+  if (isCustomVisible && customVal) {
+    targetPlaylist = customVal;
+  } else if (DOM.ytPlaylistSelect?.value) {
+    targetPlaylist = DOM.ytPlaylistSelect.value;
+  }
+
+  localStorage.setItem('chrome_bridge_yt_last_playlist', targetPlaylist);
+
+  // UI state: progress
+  if (DOM.btnYtModalSubmit) {
+    DOM.btnYtModalSubmit.disabled = true;
+    DOM.btnYtModalSubmit.innerHTML = '<span class="spinner-mini"></span> Добавление...';
+  }
+  if (DOM.ytModalStatusBox) {
+    DOM.ytModalStatusBox.classList.remove('hidden');
+  }
+  if (DOM.ytModalProgressFill) {
+    DOM.ytModalProgressFill.style.width = '35%';
+  }
+  if (DOM.ytModalStatusText) {
+    DOM.ytModalStatusText.textContent = `Отправка запроса в YouTube InnerTube для ${ManagerState.ytModalVideos.length} видео...`;
+  }
+
+  const videoIds = ManagerState.ytModalVideos.map(v => v.videoId);
+
+  chrome.runtime.sendMessage({
+    action: 'youtube_add_to_playlist',
+    params: {
+      videoIds,
+      playlistId: targetPlaylist
+    }
+  }, (res) => {
+    if (DOM.ytModalProgressFill) {
+      DOM.ytModalProgressFill.style.width = '100%';
+    }
+
+    if (res && res.success) {
+      const r = res.result || {};
+      const addedCount = r.addedCount || 0;
+      const alreadyCount = r.alreadyAddedCount || 0;
+      const channelSuffix = r.accountTitle ? ` (Канал: ${r.accountTitle})` : '';
+
+      let msg = '';
+      if (addedCount > 0 && alreadyCount > 0) {
+        msg = `✓ Добавлено ${addedCount} видео (ещё ${alreadyCount} уже были в плейлисте)${channelSuffix}!`;
+      } else if (alreadyCount > 0 && addedCount === 0) {
+        msg = `✓ Все ${alreadyCount} видео уже находятся в этом плейлисте${channelSuffix}!`;
+      } else {
+        msg = `✓ Успешно добавлено ${addedCount} видео в плейлист${channelSuffix}!`;
+      }
+
+      if (DOM.ytModalStatusText) {
+        DOM.ytModalStatusText.innerHTML = `<span style="color: #4ade80;">${escapeHtml(msg)}</span>`;
+      }
+      showToast(msg, 4500);
+
+      setTimeout(() => {
+        closeYouTubePlaylistModal();
+        clearSelection();
+      }, 1200);
+    } else {
+      const err = res?.error || 'Не удалось добавить видео в плейлист YouTube.';
+      if (DOM.ytModalStatusText) {
+        DOM.ytModalStatusText.innerHTML = `<span style="color: #f87171;">⚠️ ${escapeHtml(err)}</span>`;
+      }
+      if (DOM.btnYtModalSubmit) {
+        DOM.btnYtModalSubmit.disabled = false;
+        DOM.btnYtModalSubmit.innerHTML = '<span>▶️</span> Повторить попытку';
+      }
+      showToast(`⚠️ ${err}`, 5000);
+    }
+  });
+}
+
+function initYouTubeModalEvents() {
+  if (DOM.btnYtModalClose) {
+    DOM.btnYtModalClose.addEventListener('click', closeYouTubePlaylistModal);
+  }
+  if (DOM.btnYtModalCancel) {
+    DOM.btnYtModalCancel.addEventListener('click', closeYouTubePlaylistModal);
+  }
+  if (DOM.ytPlaylistModal) {
+    DOM.ytPlaylistModal.addEventListener('click', (e) => {
+      if (e.target === DOM.ytPlaylistModal) {
+        closeYouTubePlaylistModal();
+      }
+    });
+  }
+  if (DOM.btnRefreshYtPlaylists) {
+    DOM.btnRefreshYtPlaylists.addEventListener('click', (e) => {
+      e.stopPropagation();
+      loadYouTubePlaylists(true);
+    });
+  }
+  if (DOM.btnToggleCustomPlaylist) {
+    DOM.btnToggleCustomPlaylist.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (DOM.ytCustomPlaylistContainer) {
+        const isHidden = DOM.ytCustomPlaylistContainer.classList.contains('hidden');
+        DOM.ytCustomPlaylistContainer.classList.toggle('hidden', !isHidden);
+        if (isHidden && DOM.ytCustomPlaylistInput) {
+          DOM.ytCustomPlaylistInput.focus();
+        }
+      }
+    });
+  }
+  if (DOM.btnYtModalSubmit) {
+    DOM.btnYtModalSubmit.addEventListener('click', submitYouTubeAddToPlaylist);
+  }
 }

@@ -289,6 +289,40 @@ async def export_session_json(session_id: str) -> str:
     return result.get("json", json.dumps(result, ensure_ascii=False, indent=2))
 
 
+@mcp.tool()
+async def youtube_add_to_playlist(video_ids: Union[List[str], str], playlist_id: str = "WL") -> str:
+    """
+    Add one or multiple YouTube videos to any playlist (default: 'WL' - Watch Later) using active authorized account/brand channel.
+    Args:
+        video_ids: A single YouTube video ID / URL or a list of YouTube video IDs / URLs to add in batch.
+        playlist_id: Target playlist ID (e.g. 'WL' for Watch Later, or 'PLxxxxxxxxxxxx' or full playlist URL).
+    Returns:
+        JSON summary of addition status (addedCount, alreadyAddedCount, accountTitle, mode).
+    """
+    ids = [video_ids] if isinstance(video_ids, str) else video_ids
+    result = await send_command_to_chrome("youtube_add_to_playlist", {
+        "videoIds": ids,
+        "playlistId": playlist_id
+    })
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def youtube_get_playlists(sample_video_id: Optional[str] = None) -> str:
+    """
+    Retrieve list of playlists for the active authorized YouTube account / brand channel.
+    Args:
+        sample_video_id: Optional sample video ID to query context for.
+    Returns:
+        JSON array of available playlists (id, title, privacy).
+    """
+    params = {}
+    if sample_video_id:
+        params["sampleVideoId"] = sample_video_id
+    result = await send_command_to_chrome("youtube_get_playlists", params)
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
 
 # --- WebSocket Handler ---
 

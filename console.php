@@ -11,6 +11,8 @@
  *   php console.php open <url>         → Open new tab
  *   php console.php group              → Group tabs by domain
  *   php console.php close <id> [id2..] → Close specific tab(s)
+ *   php console.php yt-add <id> [pl]   → Add video to YouTube playlist
+ *   php console.php yt-playlists       → List available YouTube playlists
  *   php console.php serve              → Standalone PHP WebSocket server mode
  */
 
@@ -81,26 +83,29 @@ class SimpleWebSocketClient {
         }
 
         $mask = random_bytes(4);
+        $header .= $mask;
+
         $masked = '';
         for ($i = 0; $i < $length; $i++) {
             $masked .= chr(ord($data[$i]) ^ ord($mask[$i % 4]));
         }
 
-        return (fwrite($this->socket, $header . $mask . $masked) !== false);
+        $written = @fwrite($this->socket, $header . $masked);
+        return $written !== false;
     }
 
     public function receiveFrame() {
         if (!$this->socket) return null;
 
-        $hdr = fread($this->socket, 2);
-        if (strlen($hdr) < 2) return null;
+        $header = fread($this->socket, 2);
+        if ($header === false || strlen($header) < 2) return null;
 
-        $byte1 = ord($hdr[0]);
-        $byte2 = ord($hdr[1]);
+        $byte1 = ord($header[0]);
+        $byte2 = ord($header[1]);
+
         $opcode = $byte1 & 0x0F;
-
-        if ($opcode === 0x8) { // Connection Close
-            $this->close();
+        if ($opcode === 0x8) {
+            // Close frame
             return null;
         }
 
@@ -114,8 +119,8 @@ class SimpleWebSocketClient {
         } elseif ($length === 127) {
             $ext = fread($this->socket, 8);
             if (strlen($ext) < 8) return null;
-            $parts = unpack('Nhigh/Nlow', $ext);
-            $length = ($parts['high'] << 32) | $parts['low'];
+            $unpacked = unpack('Nhigh/Nlow', $ext);
+            $length = ($unpacked['high'] << 32) | $unpacked['low'];
         }
 
         $mask = '';
@@ -213,6 +218,8 @@ function showHelp() {
     echo "  php console.php smart-organize     → Смысловая организация по 3 окнам\n";
     echo "  php console.php layout <file.json> → Применить внешний макет от AI\n";
     echo "  php console.php close <id1> [id2]  → Закрыть указанную вкладку(и)\n";
+    echo "  php console.php yt-add <id> [pl]   → Добавить видео в плейлист YouTube\n";
+    echo "  php console.php yt-playlists [id]  → Список плейлистов канала YouTube\n";
     echo "  php console.php serve              → Автономный PHP WebSocket сервер (резервный)\n";
     echo "  php console.php help               → Показать эту справку\n\n";
     echo "Сервер моста: ws://127.0.0.1:8765\n";
@@ -736,6 +743,65 @@ switch ($command) {
 
         $closed = $res['result']['closed'] ?? [];
         echo "🗑️ Закрыто вкладок: " . count($closed) . " → " . implode(', ', $closed) . "\n\n";
+        break;
+    }
+
+    case 'yt-add':
+    case 'youtube-add': {
+        if (!isset($args[1])) {
+            echo "❌ Укажите ID или URL видео: php console.php yt-add <video_id|url> [playlist_id]\n";
+            exit(1);
+        }
+        $vIds = array_slice($args, 1);
+        $playlistId = 'WL';
+        if (count($vIds) > 1 && (strpos(end($vIds), 'PL') === 0 || end($vIds) === 'WL' || strpos(end($vIds), 'list=') !== false)) {
+            $playlistId = array_pop($vIds);
+        }
+        echo "\nChrome Agent Bridge → Добавление " . count($vIds) . " видео в плейлист '{$playlistId}'...\n";
+        $res = $client->request('youtube_add_to_playlist', [
+            'videoIds' => $vIds,
+            'playlistId' => $playlistId
+        ]);
+        if (!($res['success'] ?? false)) {
+            echo "❌ Ошибка: " . ($res['error'] ?? 'Не удалось добавить видео') . "\n";
+            exit(1);
+        }
+        $r = $res['result'] ?? [];
+        $acc = !empty($r['accountTitle']) ? " (Канал: {$r['accountTitle']})" : '';
+        echo "✨ Видео успешно добавлены в YouTube{$acc}!\n";
+        echo "   • Плейлист: " . ($r['playlistId'] ?? $playlistId) . "\n";
+        echo "   • Добавлено: " . ($r['addedCount'] ?? count($vIds)) . "\n";
+        if (!empty($r['alreadyAddedCount'])) {
+            echo "   • Уже были в плейлисте: {$r['alreadyAddedCount']}\n";
+        }
+        echo "\n";
+        break;
+    }
+
+    case 'yt-playlists':
+    case 'youtube-playlists': {
+        $sampleId = isset($args[1]) ? $args[1] : null;
+        echo "\nChrome Agent Bridge → Загрузка плейлистов активного YouTube канала...\n";
+        $res = $client->request('youtube_get_playlists', [
+            'sampleVideoId' => $sampleId
+        ]);
+        if (!($res['success'] ?? false)) {
+            echo "❌ Ошибка: " . ($res['error'] ?? 'Не удалось получить плейлисты') . "\n";
+            exit(1);
+        }
+        $r = $res['result'] ?? [];
+        $acc = !empty($r['accountTitle']) ? " [{$r['accountTitle']}]" : '';
+        $playlists = $r['playlists'] ?? [];
+        echo "📺 Доступные плейлисты{$acc}:\n\n";
+        echo "  " . mbPad("ID", 38) . mbPad("Название", 34) . "Приватность\n";
+        echo "  " . str_repeat('-', 80) . "\n";
+        foreach ($playlists as $p) {
+            $pid = mbPad($p['id'] ?? '', 38);
+            $title = mbPad($p['title'] ?? '', 34);
+            $priv = $p['privacy'] ?? 'UNKNOWN';
+            echo "  {$pid}{$title}{$priv}\n";
+        }
+        echo "\n";
         break;
     }
 
